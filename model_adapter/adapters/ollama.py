@@ -13,6 +13,7 @@ from ..interfaces import (
     ChatChunk,
     ChatMessage,
     TokenUsage,
+    ChatChoice,
 )
 
 class OllamaAdapter(BaseModelAdapter):
@@ -109,19 +110,21 @@ class OllamaAdapter(BaseModelAdapter):
     
     def _transform_response(self, response: Dict[str, Any], model: str) -> ApiResponse:
         """转换响应格式"""
+        message = ChatMessage(
+            role='assistant',
+            content=response.get('message', {}).get('content', '')
+        )
+        choice = ChatChoice(
+            index=0,
+            message=message,
+            finish_reason='stop' if response.get('done') else 'length'
+        )
         return ApiResponse(
             id=f"ollama-{int(time.time())}",
             object='chat.completion',
             created=int(time.time()),
             model=model,
-            choices=[{
-                'index': 0,
-                'message': ChatMessage(
-                    role='assistant',
-                    content=response.get('message', {}).get('content', '')
-                ),
-                'finish_reason': 'stop' if response.get('done') else 'length'
-            }],
+            choices=[choice],
             usage=TokenUsage(
                 prompt_tokens=response.get('prompt_eval_count', 0),
                 completion_tokens=response.get('eval_count', 0),

@@ -45,7 +45,7 @@ class ModelAdapterFactory:
         
         # Merge default and user-provided config
         # Note: This is a shallow merge. A deep merge might be needed for nested configs.
-        merged_config_dict = {**adapter_info.default_config.__dict__, **config.__dict__}
+        merged_config_dict = {**adapter_info.default_config, **config}
         merged_config = ProviderConfig(**merged_config_dict)
         
         return adapter_info.adapter_class(merged_config)

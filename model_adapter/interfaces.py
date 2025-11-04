@@ -36,8 +36,8 @@ class PricingInfo:
 @dataclass
 class ServiceTier:
     """服务层级定价"""
-    name: Optional[str] = None  # 服务层级名称 (flex, priority等)
     context_window: int
+    name: Optional[str] = None  # 服务层级名称 (flex, priority等)
     input_price: Optional[float] = None
     output_price: Optional[float] = None
     cache_writes_price: Optional[float] = None

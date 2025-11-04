@@ -3,6 +3,7 @@ import asyncio
 import random
 from typing import Dict, List, Optional, AsyncIterable, Tuple, Any
 from dataclasses import dataclass, field
+import dataclasses
 
 from .interfaces import (
     IModelAdapter,
@@ -282,7 +283,15 @@ class ModelScheduler:
                     print(f"Attempting fallback to provider: {fallback_provider}")
                     # Create a new context for the fallback, removing the specific model
                     fallback_context = dataclasses.replace(context, model=None)
+                    
+                    # Temporarily change the default provider to the fallback provider
+                    original_default_provider = self.config.default_provider
+                    self.config.default_provider = fallback_provider
+                    
                     fallback_schedule = await self.schedule(fallback_context)
+                    
+                    # Restore the original default provider
+                    self.config.default_provider = original_default_provider
                     
                     print(f"Fallback using {fallback_provider} with model {fallback_schedule.model}")
                     params = self._build_request_params(context, fallback_schedule.model)

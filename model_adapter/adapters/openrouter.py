@@ -11,6 +11,8 @@ from ..interfaces import (
     ApiResponse,
     ChatChunk,
     TokenUsage,
+    ChatChoice,
+    ChatMessage,
 )
 
 class OpenRouterAdapter(BaseModelAdapter):
@@ -52,15 +54,16 @@ class OpenRouterAdapter(BaseModelAdapter):
                 continue
             
             pricing = model_data.get('pricing', {})
+            capabilities_data = model_data.get('architecture', {})
             models.append(ModelInfo(
                 id=model_data.get('id'),
                 name=model_data.get('name', model_data.get('id')),
                 max_tokens=model_data.get('top_provider', {}).get('max_completion_tokens') or 4096,
                 context_window=model_data.get('context_length'),
                 capabilities=ModelCapabilities(
-                    supports_images='vision' in model_data.get('architecture', {}).get('modality', ''),
-                    supports_prompt_cache=self._supports_prompt_caching(model_data.get('id')),
-                    supports_reasoning_budget=self._supports_reasoning_budget(model_data.get('id')),
+                    supports_images='vision' in capabilities_data.get('modality', ''),
+                    supports_prompt_cache=capabilities_data.get('prompt_caching', False),
+                    supports_reasoning_budget=capabilities_data.get('reasoning_budget', False),
                 ),
                 pricing=PricingInfo(
                     input_price=float(pricing.get('prompt', 0)) * 1_000_000,
@@ -84,28 +87,27 @@ class OpenRouterAdapter(BaseModelAdapter):
         """流式聊天请求"""
         request_body = {**self._build_chat_request(params), 'stream': True}
         
-        timeout = aiohttp.ClientTimeout(total=self.config.get('timeout', 30))
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(
-                f"{self.base_url}/chat/completions",
-                headers=self.default_headers,
-                json=request_body
-            ) as response:
-                if not response.ok:
-                    raise ApiError(response.status, await response.text())
-                
-                async for line in response.content:
-                    line = line.decode('utf-8').strip()
-                    if line.startswith('data: '):
-                        data = line[6:]
-                        if data == '[DONE]':
-                            return
-                        
-                        try:
-                            parsed = json.loads(data)
-                            yield self._transform_chunk(parsed)
-                        except json.JSONDecodeError:
-                            continue
+        session = await self._get_session()
+        async with session.post(
+            f"{self.base_url}/chat/completions",
+            headers=self.default_headers,
+            json=request_body
+        ) as response:
+            if not response.ok:
+                raise ApiError(response.status, await response.text())
+            
+            async for line in response.content:
+                line = line.decode('utf-8').strip()
+                if line.startswith('data: '):
+                    data = line[6:]
+                    if data == '[DONE]':
+                        return
+                    
+                    try:
+                        parsed = json.loads(data)
+                        yield self._transform_chunk(parsed)
+                    except json.JSONDecodeError:
+                        continue
     
     def _build_chat_request(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """构建聊天请求"""
@@ -142,7 +144,13 @@ class OpenRouterAdapter(BaseModelAdapter):
             object='chat.completion',
             created=response.get('created'),
             model=response.get('model'),
-            choices=response.get('choices', []),
+            choices=[
+                ChatChoice(
+                    index=choice.get('index'),
+                    message=ChatMessage(**choice.get('message')),
+                    finish_reason=choice.get('finish_reason')
+                ) for choice in response.get('choices', [])
+            ],
             usage=TokenUsage(**usage_data) if usage_data else None
         )
     
@@ -156,23 +164,6 @@ class OpenRouterAdapter(BaseModelAdapter):
             choices=chunk.get('choices', [])
         )
     
-    def _supports_prompt_caching(self, model_id: str) -> bool:
-        """检查模型是否支持提示缓存"""
-        # This is a sample list, a more robust solution would be needed
-        caching_models = [
-            'anthropic/claude-3',
-            'google/gemini-flash-1.5',
-        ]
-        return any(model in model_id for model in caching_models)
-    
-    def _supports_reasoning_budget(self, model_id: str) -> bool:
-        """检查模型是否支持推理预算"""
-        # This is a sample list, a more robust solution would be needed
-        reasoning_models = [
-            'anthropic/claude-3',
-            'google/gemini-pro-1.5',
-        ]
-        return any(model in model_id for model in reasoning_models)
     
     def _requires_api_key(self) -> bool:
         return True

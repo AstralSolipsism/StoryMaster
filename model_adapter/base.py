@@ -27,6 +27,7 @@ class BaseHttpClient(ABC):
         self.config = config
         self.base_url = config.get('base_url') or self._get_default_base_url()
         self.default_headers = self._get_default_headers()
+        self._session: Optional[aiohttp.ClientSession] = None
     
     @abstractmethod
     def _get_default_base_url(self) -> str:
@@ -38,32 +39,37 @@ class BaseHttpClient(ABC):
         """获取默认请求头"""
         pass
     
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """获取 aiohttp.ClientSession"""
+        if self._session is None or self._session.closed:
+            timeout = aiohttp.ClientTimeout(
+                total=self.config.get('timeout', 30),
+                connect=10
+            )
+            self._session = aiohttp.ClientSession(timeout=timeout)
+        return self._session
+
     async def _request(self, endpoint: str, **kwargs) -> Any:
         """发送HTTP请求"""
         url = f"{self.base_url}{endpoint}"
         headers = {**self.default_headers, **kwargs.get('headers', {})}
         
-        timeout = aiohttp.ClientTimeout(
-            total=self.config.get('timeout', 30),
-            connect=10
-        )
+        session = await self._get_session()
         
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            try:
-                async with session.request(
-                    method=kwargs.get('method', 'POST'),
-                    url=url,
-                    headers=headers,
-                    json=kwargs.get('body'),
-                    # signal=kwargs.get('signal') # signal is not a valid argument for session.request
-                ) as response:
-                    if not response.ok:
-                        error_text = await response.text()
-                        raise ApiError(response.status, error_text)
-                    
-                    return await response.json()
-            except asyncio.TimeoutError:
-                raise ApiError(408, "Request timeout")
+        try:
+            async with session.request(
+                method=kwargs.get('method', 'POST'),
+                url=url,
+                headers=headers,
+                json=kwargs.get('body'),
+            ) as response:
+                if not response.ok:
+                    error_text = await response.text()
+                    raise ApiError(response.status, error_text)
+                
+                return await response.json()
+        except asyncio.TimeoutError:
+            raise ApiError(408, "Request timeout")
     
     def _create_request_options(self, body: Any, custom_headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         """创建请求选项"""

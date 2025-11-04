@@ -16,6 +16,7 @@ from ..interfaces import (
     ChatChunk,
     ChatMessage,
     TokenUsage,
+    ChatChoice,
 )
 
 class AnthropicAdapter(BaseModelAdapter):
@@ -263,11 +264,13 @@ class AnthropicAdapter(BaseModelAdapter):
             object='chat.completion',
             created=int(time.time()),
             model=model,
-            choices=[{
-                'index': 0,
-                'message': message,
-                'finish_reason': response.get('stop_reason')
-            }],
+            choices=[
+                ChatChoice(
+                    index=0,
+                    message=message,
+                    finish_reason=response.get('stop_reason')
+                )
+            ],
             usage=TokenUsage(
                 prompt_tokens=usage_data.get('input_tokens', 0),
                 completion_tokens=usage_data.get('output_tokens', 0),
