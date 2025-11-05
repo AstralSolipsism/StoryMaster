@@ -1,6 +1,7 @@
 import time
 import asyncio
 import random
+import logging
 from typing import Dict, List, Optional, AsyncIterable, Tuple, Any
 from dataclasses import dataclass, field
 import dataclasses
@@ -25,6 +26,8 @@ class SchedulerConfig:
     retry_delay: int = 1  # in seconds
     enable_load_balancing: bool = False
     cost_threshold: Optional[float] = None
+    high_priority_latency_threshold: int = 5000
+    default_latencies: Dict[str, int] = field(default_factory=lambda: {'anthropic': 2000, 'openrouter': 3000, 'ollama': 500})
 
 @dataclass
 class RequestContext:
@@ -81,6 +84,9 @@ class ModelScheduler:
         self.provider_configs = provider_configs or {}
         self.adapters: Dict[str, IModelAdapter] = {}
         self.metrics: Dict[str, ProviderMetrics] = {}
+        self.model_cache: Dict[str, Tuple[List[ModelInfo], float]] = {}
+        self.cache_ttl: int = 600  # 10 minutes
+        self.metrics_lock = asyncio.Lock()
     
     async def initialize(self) -> None:
         """初始化适配器"""
@@ -94,14 +100,15 @@ class ModelScheduler:
                 validation = adapter.validate_config(config)
                 if validation.is_valid:
                     # Pre-load models for non-local providers
-                    if not ModelAdapterFactory._registry[provider_name].is_local:
+                    adapter_info = ModelAdapterFactory.get_adapter_info(provider_name)
+                    if adapter_info and not adapter_info.is_local:
                         await adapter.get_models()
                     self.adapters[provider_name] = adapter
-                    print(f"Initialized adapter for provider: {provider_name}")
+                    logging.info("Initialized adapter for provider: %s", provider_name)
                 else:
-                    print(f"Failed to initialize {provider_name}: {validation.errors}")
+                    logging.warning("Failed to initialize %s: %s", provider_name, validation.errors)
             except Exception as error:
-                print(f"Error initializing {provider_name}: {error}")
+                logging.error("Error initializing provider %s", provider_name, exc_info=True)
     
     async def schedule(self, context: RequestContext) -> ScheduleResult:
         """调度最佳适配器"""
@@ -132,11 +139,11 @@ class ModelScheduler:
             )
             
             latency = int((time.monotonic() - start_time) * 1000)
-            self._update_metrics(schedule.provider, latency, response)
+            await self._update_metrics(schedule.provider, latency, response)
             return response
         except Exception as error:
             latency = int((time.monotonic() - start_time) * 1000)
-            self._update_metrics(schedule.provider, latency, error=error)
+            await self._update_metrics(schedule.provider, latency, error=error)
             return await self._handle_failure(error, context, schedule)
     
     async def chat_stream(self, context: RequestContext) -> AsyncIterable[ChatChunk]:
@@ -154,10 +161,10 @@ class ModelScheduler:
                 yield chunk
             
             latency = int((time.monotonic() - start_time) * 1000)
-            self._update_metrics(schedule.provider, latency)
+            await self._update_metrics(schedule.provider, latency)
         except Exception as error:
             latency = int((time.monotonic() - start_time) * 1000)
-            self._update_metrics(schedule.provider, latency, error=error)
+            await self._update_metrics(schedule.provider, latency, error=error)
             async for chunk in self._handle_stream_failure(error, context, schedule):
                 yield chunk
     
@@ -167,7 +174,12 @@ class ModelScheduler:
         
         for provider_name, adapter in self.adapters.items():
             try:
-                models = await adapter.get_models()
+                cached_models, timestamp = self.model_cache.get(provider_name, (None, 0))
+                if cached_models and time.monotonic() - timestamp < self.cache_ttl:
+                    models = cached_models
+                else:
+                    models = await adapter.get_models()
+                    self.model_cache[provider_name] = (models, time.monotonic())
                 suitable_models = self._find_suitable_models(models, context)
                 
                 for model in suitable_models:
@@ -187,7 +199,7 @@ class ModelScheduler:
                         score=self._calculate_score(estimated_cost, estimated_latency, context)
                     ))
             except Exception as error:
-                print(f"Failed to get models from {provider_name}: {error}")
+                logging.warning("Failed to get models from %s: %s", provider_name, error)
         
         return sorted(candidates, key=lambda x: x.score, reverse=True)
     
@@ -269,7 +281,7 @@ class ModelScheduler:
         schedule: ScheduleResult
     ) -> ApiResponse:
         """处理请求失败"""
-        print(f"Request failed with {schedule.provider} ({schedule.model}): {error}")
+        logging.warning("Request failed with %s (%s): %s", schedule.provider, schedule.model, error)
         if self.config.fallback_providers:
             for fallback_provider in self.config.fallback_providers:
                 if fallback_provider == schedule.provider:
@@ -280,24 +292,24 @@ class ModelScheduler:
                     continue
 
                 try:
-                    print(f"Attempting fallback to provider: {fallback_provider}")
+                    logging.info("Attempting fallback to provider: %s", fallback_provider)
                     # Create a new context for the fallback, removing the specific model
                     fallback_context = dataclasses.replace(context, model=None)
                     
-                    # Temporarily change the default provider to the fallback provider
-                    original_default_provider = self.config.default_provider
-                    self.config.default_provider = fallback_provider
+                    # Create a temporary scheduler config for fallback
+                    fallback_config = dataclasses.replace(self.config, default_provider=fallback_provider)
                     
-                    fallback_schedule = await self.schedule(fallback_context)
+                    # Create a temporary scheduler to handle the fallback
+                    fallback_scheduler = ModelScheduler(fallback_config, self.provider_configs)
+                    fallback_scheduler.adapters = self.adapters # Reuse existing adapters
                     
-                    # Restore the original default provider
-                    self.config.default_provider = original_default_provider
+                    fallback_schedule = await fallback_scheduler.schedule(fallback_context)
                     
-                    print(f"Fallback using {fallback_provider} with model {fallback_schedule.model}")
+                    logging.info("Fallback using %s with model %s", fallback_provider, fallback_schedule.model)
                     params = self._build_request_params(context, fallback_schedule.model)
                     return await fallback_schedule.adapter.chat(params)
                 except Exception as fallback_error:
-                    print(f"Fallback provider {fallback_provider} also failed: {fallback_error}")
+                    logging.warning("Fallback provider %s also failed: %s", fallback_provider, fallback_error)
         
         raise error
     
@@ -308,7 +320,7 @@ class ModelScheduler:
         schedule: ScheduleResult
     ) -> AsyncIterable[ChatChunk]:
         """处理流式请求失败"""
-        print(f"Stream failed with {schedule.provider} ({schedule.model}): {error}")
+        logging.warning("Stream failed with %s (%s): %s", schedule.provider, schedule.model, error)
         try:
             fallback_response = await self._handle_failure(error, context, schedule)
             
@@ -336,7 +348,7 @@ class ModelScheduler:
                 model=schedule.model,
                 choices=[{
                     'index': 0,
-                    'delta': {'content': f"\n\n--- ERROR ---\nInitial error: {error}\nFallback error: {fallback_error}"},
+                    'delta': {'content': "\n\n--- ERROR ---\nAn unexpected error occurred. Please try again."},
                     'finish_reason': 'error'
                 }]
             )
@@ -366,7 +378,7 @@ class ModelScheduler:
     
     def _estimate_cost(self, adapter: IModelAdapter, model_id: str, context: RequestContext) -> float:
         """估算成本"""
-        # Simple token estimation, a real implementation should use a tokenizer
+        # TODO: Replace with a more accurate tokenizer like tiktoken
         prompt_tokens = sum(len(str(msg.content)) // 4 for msg in context.messages)
         completion_tokens = context.max_tokens or 1000
         
@@ -384,8 +396,7 @@ class ModelScheduler:
         if metrics and metrics.average_latency > 0:
             return int(metrics.average_latency)
         
-        defaults = {'anthropic': 2000, 'openrouter': 3000, 'ollama': 5000}
-        return defaults.get(provider_name, 3000)
+        return self.config.default_latencies.get(provider_name, 3000)
     
     def _build_request_params(self, context: RequestContext, model: str) -> Dict[str, Any]:
         """构建请求参数"""
@@ -405,23 +416,24 @@ class ModelScheduler:
         """检查候选是否可接受"""
         if self.config.cost_threshold and candidate.estimated_cost > self.config.cost_threshold:
             return False
-        if context.priority == 'high' and candidate.estimated_latency > 5000:
+        if context.priority == 'high' and candidate.estimated_latency > self.config.high_priority_latency_threshold:
             return False
         return True
     
-    def _update_metrics(self, provider_name: str, latency: int, response: Optional[ApiResponse] = None, error: Optional[Exception] = None) -> None:
+    async def _update_metrics(self, provider_name: str, latency: int, response: Optional[ApiResponse] = None, error: Optional[Exception] = None) -> None:
         """更新指标"""
-        metrics = self.metrics.get(provider_name, ProviderMetrics())
-        metrics.request_count += 1
-        metrics.total_latency += latency
-        
-        if error:
-            metrics.error_count += 1
-        else:
-            metrics.success_count += 1
-            if response and response.usage:
-                cost = self.adapters[provider_name].calculate_cost(response.model, response.usage)
-                metrics.total_cost += cost
+        async with self.metrics_lock:
+            metrics = self.metrics.get(provider_name, ProviderMetrics())
+            metrics.request_count += 1
+            metrics.total_latency += latency
+            
+            if error:
+                metrics.error_count += 1
+            else:
+                metrics.success_count += 1
+                if response and response.usage:
+                    cost = self.adapters[provider_name].calculate_cost(response.model, response.usage)
+                    metrics.total_cost += cost
 
-        metrics.average_latency = metrics.total_latency / metrics.request_count
-        self.metrics[provider_name] = metrics
+            metrics.average_latency = metrics.total_latency / metrics.request_count
+            self.metrics[provider_name] = metrics

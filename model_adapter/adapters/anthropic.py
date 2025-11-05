@@ -21,6 +21,10 @@ from ..interfaces import (
 
 class AnthropicAdapter(BaseModelAdapter):
     """Anthropic模型适配器"""
+
+    def __init__(self, config: ProviderConfig):
+        super().__init__(config)
+        self.stream_usage: Optional[Dict[str, Any]] = None
     
     DEFAULT_BASE_URL = "https://api.anthropic.com"
     DEFAULT_MAX_TOKENS = 8192
@@ -40,6 +44,8 @@ class AnthropicAdapter(BaseModelAdapter):
         
         api_key = self.config.get('api_key')
         if api_key:
+            if not isinstance(api_key, str) or not api_key.startswith('sk-'):
+                raise ValueError("Invalid Anthropic API key format.")
             headers['x-api-key'] = api_key
         
         if self.config.get('anthropic_beta_1m_context'):
@@ -48,72 +54,26 @@ class AnthropicAdapter(BaseModelAdapter):
         return headers
     
     async def _fetch_models(self) -> List[ModelInfo]:
-        """Anthropic模型列表是静态的"""
-        # This is a static list based on the documentation.
-        # In a real-world scenario, this might be fetched from a configuration service
-        # or a less frequently updated API endpoint.
-        return [
-            ModelInfo(
-                id="claude-3-5-sonnet-20240620",
-                name="Claude 3.5 Sonnet",
-                max_tokens=8192,
-                context_window=200000,
-                capabilities=ModelCapabilities(
-                    supports_images=True,
-                    supports_prompt_cache=True,
-                    supports_reasoning_budget=True,
-                ),
-                pricing=PricingInfo(
-                    input_price=3.0,
-                    output_price=15.0,
-                    cache_writes_price=3.75,
-                    cache_reads_price=0.3,
-                ),
-                tiers=[
-                    ServiceTier(
-                        name="default",
-                        context_window=200000,
-                        input_price=3.0,
-                        output_price=15.0,
-                        cache_writes_price=3.75,
-                        cache_reads_price=0.3,
-                    ),
-                    ServiceTier(
-                        name="1m-context",
-                        context_window=1000000,
-                        input_price=6.0,
-                        output_price=22.5,
-                        cache_writes_price=7.5,
-                        cache_reads_price=0.6,
-                    ),
-                ],
-            ),
-            # Adding other models for completeness
-            ModelInfo(
-                id="claude-3-opus-20240229",
-                name="Claude 3 Opus",
-                max_tokens=4096,
-                context_window=200000,
-                capabilities=ModelCapabilities(supports_images=True),
-                pricing=PricingInfo(input_price=15.0, output_price=75.0),
-            ),
-            ModelInfo(
-                id="claude-3-sonnet-20240229",
-                name="Claude 3 Sonnet",
-                max_tokens=4096,
-                context_window=200000,
-                capabilities=ModelCapabilities(supports_images=True),
-                pricing=PricingInfo(input_price=3.0, output_price=15.0),
-            ),
-            ModelInfo(
-                id="claude-3-haiku-20240307",
-                name="Claude 3 Haiku",
-                max_tokens=4096,
-                context_window=200000,
-                capabilities=ModelCapabilities(supports_images=True),
-                pricing=PricingInfo(input_price=0.25, output_price=1.25),
-            ),
-        ]
+        """从JSON文件加载Anthropic模型列表"""
+        models_file = self.config.get('anthropic_models_file', 'model_adapter/adapters/anthropic_models.json')
+        try:
+            with open(models_file, 'r', encoding='utf-8') as f:
+                models_data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return []
+
+        models = []
+        for model_data in models_data:
+            models.append(ModelInfo(
+                id=model_data['id'],
+                name=model_data['name'],
+                max_tokens=model_data['max_tokens'],
+                context_window=model_data['context_window'],
+                capabilities=ModelCapabilities(**model_data['capabilities']),
+                pricing=PricingInfo(**model_data['pricing']),
+                tiers=[ServiceTier(**tier) for tier in model_data.get('tiers', [])]
+            ))
+        return models
     
     async def chat(self, params: Dict[str, Any]) -> ApiResponse:
         """发送聊天请求"""
@@ -126,30 +86,33 @@ class AnthropicAdapter(BaseModelAdapter):
         """流式聊天请求"""
         request_body = {**self._build_chat_request(params), 'stream': True}
         
-        timeout = aiohttp.ClientTimeout(total=self.config.get('timeout', 30))
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(
-                f"{self.base_url}/v1/messages",
-                headers=self.default_headers,
-                json=request_body
-            ) as response:
+        session = await self._get_session()
+        async with session.post(
+            f"{self.base_url}/v1/messages",
+            headers=self.default_headers,
+            json=request_body
+        ) as response:
                 if not response.ok:
                     raise ApiError(response.status, await response.text())
                 
-                async for line in response.content:
-                    line = line.decode('utf-8').strip()
-                    if line.startswith('data: '):
-                        data = line[6:]
-                        if data == '[DONE]':
-                            return
-                        
-                        try:
-                            parsed = json.loads(data)
-                            transformed_chunk = self._transform_chunk(parsed, params.get('model'))
-                            if transformed_chunk:
-                                yield transformed_chunk
-                        except json.JSONDecodeError:
-                            continue
+                buffer = b""
+                async for chunk in response.content.iter_any():
+                    buffer += chunk
+                    while b'\n' in buffer:
+                        line, buffer = buffer.split(b'\n', 1)
+                        line = line.decode('utf-8').strip()
+                        if line.startswith('data: '):
+                            data = line[6:]
+                            if data == '[DONE]':
+                                return
+                            
+                            try:
+                                parsed = json.loads(data)
+                                transformed_chunk = self._transform_chunk(parsed, params.get('model'))
+                                if transformed_chunk:
+                                    yield transformed_chunk
+                            except json.JSONDecodeError:
+                                continue
     
     def _build_chat_request(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """构建聊天请求"""
@@ -211,22 +174,29 @@ class AnthropicAdapter(BaseModelAdapter):
                     if item.get('type') == 'image_url':
                         # Assuming image_url is a dict with 'url' key like "data:image/jpeg;base64,..."
                         image_data = item['image_url']['url']
-                        media_type = image_data.split(';')[0].split(':')[1]
-                        base64_data = image_data.split(',')[1]
-                        content_list.append({
-                            'type': 'image',
-                            'source': {
-                                'type': 'base64',
-                                'media_type': media_type,
-                                'data': base64_data,
-                            },
-                        })
+                        try:
+                            # Expected format: "data:image/jpeg;base64,..."
+                            header, base64_data = image_data.split(',', 1)
+                            if 'base64' not in header:
+                                continue
+                            media_type = header.split(';')[0].split(':')[1]
+                            content_list.append({
+                                'type': 'image',
+                                'source': {
+                                    'type': 'base64',
+                                    'media_type': media_type,
+                                    'data': base64_data,
+                                },
+                            })
+                        except (ValueError, IndexError):
+                            # Skip malformed image data
+                            continue
                     else: # text block
                         content_list.append(item)
             
             transformed_message = {'role': msg.role, 'content': content_list}
             if msg.tool_calls:
-                 transformed_message['tool_calls'] = msg.tool_calls
+                transformed_message['tool_calls'] = msg.tool_calls
             
             transformed.append(transformed_message)
 

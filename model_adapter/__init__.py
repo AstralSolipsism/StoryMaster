@@ -1,7 +1,19 @@
 """
-Model Adapter package.
+A unified interface for interacting with various large language models.
+
+This package provides a standardized way to:
+- List available models from different providers.
+- Send chat completion requests (blocking and streaming).
+- Calculate the cost of API usage.
+- Validate provider configurations.
+
+It includes a scheduler to automatically select the best model based on cost,
+latency, and other factors.
 """
 
+__version__ = "1.0.0"
+
+# Interfaces
 from .interfaces import (
     ModelInfo,
     ProviderConfig,
@@ -21,10 +33,13 @@ from .interfaces import (
     OpenRouterConfig,
 )
 
+# Base classes
 from .base import BaseModelAdapter, ApiError
 
+# Factory
 from .factory import ModelAdapterFactory
 
+# Scheduler
 from .scheduler import ModelScheduler, SchedulerConfig, RequestContext
 
 __all__ = [

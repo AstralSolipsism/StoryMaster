@@ -52,7 +52,10 @@ class BaseHttpClient(ABC):
     async def _request(self, endpoint: str, **kwargs) -> Any:
         """发送HTTP请求"""
         url = f"{self.base_url}{endpoint}"
-        headers = {**self.default_headers, **kwargs.get('headers', {})}
+        request_options = self._create_request_options(
+            kwargs.get('body'),
+            kwargs.get('headers')
+        )
         
         session = await self._get_session()
         
@@ -60,8 +63,9 @@ class BaseHttpClient(ABC):
             async with session.request(
                 method=kwargs.get('method', 'POST'),
                 url=url,
-                headers=headers,
-                json=kwargs.get('body'),
+                headers=request_options['headers'],
+                json=request_options['body'],
+                timeout=request_options['timeout']
             ) as response:
                 if not response.ok:
                     error_text = await response.text()
@@ -102,11 +106,11 @@ class BaseModelAdapter(BaseHttpClient, IModelAdapter):
         errors = []
         
         if not config.get('api_key') and self._requires_api_key():
-            errors.append('API key is required')
+            errors.append('需要API密钥')
         
         base_url = config.get('base_url')
         if base_url and not self._is_valid_url(base_url):
-            errors.append('Invalid base URL')
+            errors.append('无效的基础URL')
         
         return ValidationResult(is_valid=len(errors) == 0, errors=errors)
     
@@ -114,6 +118,9 @@ class BaseModelAdapter(BaseHttpClient, IModelAdapter):
         """计算API成本"""
         model_info = self._get_model(model)
         if not model_info:
+            return 0.0
+        
+        if not model_info.pricing or not usage:
             return 0.0
         
         pricing = model_info.pricing
@@ -161,7 +168,7 @@ class BaseModelAdapter(BaseHttpClient, IModelAdapter):
         try:
             result = urlparse(url)
             return all([result.scheme, result.netloc])
-        except Exception:
+        except (ValueError, TypeError):
             return False
     
     @abstractmethod

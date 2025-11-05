@@ -1,6 +1,8 @@
+import asyncio
 import aiohttp
 import json
 import time
+import logging
 from typing import AsyncIterable, Dict, Any, List, Optional
 
 from ..base import BaseModelAdapter, ApiError
@@ -20,6 +22,8 @@ class OllamaAdapter(BaseModelAdapter):
     """Ollama本地模型适配器"""
     
     DEFAULT_BASE_URL = "http://localhost:11434"
+    DEFAULT_MAX_TOKENS = 4096
+    DEFAULT_CONTEXT_WINDOW = 2048
     
     @property
     def provider_name(self) -> str:
@@ -37,15 +41,15 @@ class OllamaAdapter(BaseModelAdapter):
             response = await self._request('/api/tags', method='GET')
             
             models = []
-            for model_data in response.get('models', []):
-                # Fetch detailed info for each model
-                details = await self._request('/api/show', body={'name': model_data['name']}, method='POST')
-                
+            tasks = [self._request('/api/show', body={'name': model_data['name']}, method='POST') for model_data in response.get('models', [])]
+            details_list = await asyncio.gather(*tasks)
+
+            for model_data, details in zip(response.get('models', []), details_list):
                 models.append(ModelInfo(
                     id=model_data.get('name'),
                     name=model_data.get('name'),
-                    max_tokens=4096,  # Default, can be overridden by model params
-                    context_window=details.get('details', {}).get('parameter_size', 2048),
+                    max_tokens=self.DEFAULT_MAX_TOKENS,
+                    context_window=details.get('details', {}).get('parameter_size', self.DEFAULT_CONTEXT_WINDOW),
                     capabilities=ModelCapabilities(
                         supports_images='clip' in str(details.get('details', {}).get('families')),
                         supports_prompt_cache=False,
@@ -56,9 +60,9 @@ class OllamaAdapter(BaseModelAdapter):
                 ))
             
             return models
-        except Exception as error:
+        except (aiohttp.ClientError, json.JSONDecodeError, asyncio.TimeoutError) as error:
             # If Ollama service is not available, return an empty list
-            print(f"Failed to fetch Ollama models: {error}")
+            logging.warning("Failed to fetch Ollama models: %s", error)
             return []
     
     async def chat(self, params: Dict[str, Any]) -> ApiResponse:
@@ -73,7 +77,8 @@ class OllamaAdapter(BaseModelAdapter):
         request_body = {**self._build_chat_request(params), 'stream': True}
         
         timeout = aiohttp.ClientTimeout(total=self.config.get('timeout', 60))
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        connector = aiohttp.TCPConnector(ssl=self.config.get('ollama_ssl_verify', True))
+        async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
             async with session.post(
                 f"{self.base_url}/api/chat",
                 headers=self.default_headers,

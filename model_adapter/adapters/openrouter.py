@@ -19,6 +19,7 @@ class OpenRouterAdapter(BaseModelAdapter):
     """OpenRouter动态模型适配器"""
     
     DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
+    DEFAULT_MAX_TOKENS = 4096
     
     @property
     def provider_name(self) -> str:
@@ -30,8 +31,10 @@ class OpenRouterAdapter(BaseModelAdapter):
     def _get_default_headers(self) -> Dict[str, str]:
         headers = {
             'Content-Type': 'application/json',
-            'HTTP-Referer': 'https://roo-code.com', # Replace with your app's URL
-            'X-Title': 'Roo Code', # Replace with your app's name
+            # Replace with your app's URL
+            'HTTP-Referer': self.config.get('http_referer', 'https://roo-code.com'),
+            # Replace with your app's name
+            'X-Title': self.config.get('x_title', 'Roo Code'),
         }
         
         api_key = self.config.get('api_key') # Standardized to 'api_key'
@@ -58,7 +61,7 @@ class OpenRouterAdapter(BaseModelAdapter):
             models.append(ModelInfo(
                 id=model_data.get('id'),
                 name=model_data.get('name', model_data.get('id')),
-                max_tokens=model_data.get('top_provider', {}).get('max_completion_tokens') or 4096,
+                max_tokens=model_data.get('top_provider', {}).get('max_completion_tokens') or self.DEFAULT_MAX_TOKENS,
                 context_window=model_data.get('context_length'),
                 capabilities=ModelCapabilities(
                     supports_images='vision' in capabilities_data.get('modality', ''),
@@ -97,7 +100,10 @@ class OpenRouterAdapter(BaseModelAdapter):
                 raise ApiError(response.status, await response.text())
             
             async for line in response.content:
-                line = line.decode('utf-8').strip()
+                try:
+                    line = line.decode('utf-8').strip()
+                except UnicodeDecodeError:
+                    continue
                 if line.startswith('data: '):
                     data = line[6:]
                     if data == '[DONE]':
@@ -125,13 +131,15 @@ class OpenRouterAdapter(BaseModelAdapter):
             request['tool_choice'] = params['tool_choice']
         
         specific_provider = self.config.get('openrouter_specific_provider')
+        use_middle_out_transform = self.config.get('openrouter_use_middle_out_transform', True)
+
         if specific_provider:
             request['provider'] = {
                 'order': [specific_provider],
                 'allow_fallbacks': False,
             }
         
-        if self.config.get('openrouter_use_middle_out_transform', True):
+        if use_middle_out_transform:
             request['transforms'] = ['middle-out']
         
         return request

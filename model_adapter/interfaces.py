@@ -1,8 +1,7 @@
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Union, Any, AsyncIterable, TypedDict
+from typing import Dict, List, Optional, Union, Any, AsyncIterable, TypedDict, Literal
 from enum import Enum
 from abc import ABC, abstractmethod
-import time
 
 class ReasoningEffort(Enum):
     LOW = "low"
@@ -32,6 +31,14 @@ class PricingInfo:
     output_price: float  # 每百万输出token价格
     cache_writes_price: Optional[float] = None  # 每百万缓存写入价格
     cache_reads_price: Optional[float] = None  # 每百万缓存读取价格
+
+    def __post_init__(self):
+        if self.input_price < 0 or self.output_price < 0:
+            raise ValueError("价格不能为负数")
+        if self.cache_writes_price is not None and self.cache_writes_price < 0:
+            raise ValueError("缓存写入价格不能为负数")
+        if self.cache_reads_price is not None and self.cache_reads_price < 0:
+            raise ValueError("缓存读取价格不能为负数")
 
 @dataclass
 class ServiceTier:
@@ -77,13 +84,12 @@ class ApiModelConfig(TypedDict, total=False):
     reasoning_effort: Optional[str]
     verbosity: Optional[str]
 
-class ProviderConfig(BaseProviderConfig):
+class ProviderConfig(BaseProviderConfig, total=False):
     """提供商特定配置"""
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        # 动态添加属性
-        for key, value in kwargs.items():
-            setattr(self, key, value)
+    # This allows for arbitrary keys, which is the original intent.
+    # A better long-term solution might be to define all possible keys,
+    # but for now, this maintains flexibility while being a valid TypedDict.
+    pass
 
 class AnthropicConfig(ProviderConfig):
     """Anthropic提供商配置"""
@@ -119,7 +125,7 @@ class TokenUsage:
 @dataclass
 class ChatMessage:
     """聊天消息"""
-    role: str  # 'system' | 'user' | 'assistant' | 'tool'
+    role: Literal['system', 'user', 'assistant', 'tool']
     content: Union[str, List[Dict[str, Any]]]
     tool_calls: Optional[List[Dict[str, Any]]] = None
     tool_call_id: Optional[str] = None
@@ -141,7 +147,7 @@ class ApiResponse:
     model: str
     choices: List[ChatChoice]
     usage: Optional[TokenUsage] = None
-    error: Optional[Exception] = None
+    error: Optional[str] = None
 
 @dataclass
 class ChatChunk:
