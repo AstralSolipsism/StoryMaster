@@ -282,6 +282,7 @@ class ModelScheduler:
     ) -> ApiResponse:
         """处理请求失败"""
         logging.warning("Request failed with %s (%s): %s", schedule.provider, schedule.model, error)
+        last_fallback_error = None
         if self.config.fallback_providers:
             for fallback_provider in self.config.fallback_providers:
                 if fallback_provider == schedule.provider:
@@ -310,7 +311,10 @@ class ModelScheduler:
                     return await fallback_schedule.adapter.chat(params)
                 except Exception as fallback_error:
                     logging.warning("Fallback provider %s also failed: %s", fallback_provider, fallback_error)
+                    last_fallback_error = fallback_error
         
+        if last_fallback_error:
+            raise last_fallback_error from error
         raise error
     
     async def _handle_stream_failure(

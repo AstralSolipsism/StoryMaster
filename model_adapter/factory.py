@@ -42,6 +42,9 @@ class ModelAdapterFactory:
     @classmethod
     def create_adapter(cls, provider_name: str, config: ProviderConfig) -> IModelAdapter:
         """创建适配器实例"""
+        if not isinstance(config, dict):
+            raise TypeError("Config must be a dictionary")
+
         with cls._lock:
             adapter_info = cls._registry.get(provider_name)
         if not adapter_info:
