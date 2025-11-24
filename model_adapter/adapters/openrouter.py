@@ -37,13 +37,16 @@ class OpenRouterAdapter(BaseModelAdapter):
     def _get_default_headers(self) -> Dict[str, str]:
         headers = {
             'Content-Type': 'application/json',
-            # 使用环境变量或配置文件中的值，避免硬编码
-            'HTTP-Referer': self.config.get('http_referer',
-                os.environ.get('HTTP_REFERER', 'https://example.com')),
-            # 使用环境变量或配置文件中的值，避免硬编码
-            'X-Title': self.config.get('x_title',
-                os.environ.get('APP_NAME', 'StoryMaster')),
         }
+        
+        # 只有在明确配置时才添加这些头部
+        http_referer = self.config.get('http_referer') or os.environ.get('HTTP_REFERER')
+        if http_referer:
+            headers['HTTP-Referer'] = http_referer
+        
+        app_name = self.config.get('x_title') or os.environ.get('APP_NAME')
+        if app_name:
+            headers['X-Title'] = app_name
         
         api_key = self.config.get('api_key') # Standardized to 'api_key'
         if api_key:
@@ -110,9 +113,9 @@ class OpenRouterAdapter(BaseModelAdapter):
             json_decode_errors = 0
             unicode_decode_errors = 0
             
-            async for line in response.content:
+            async for line in response.content.iter_lines():
                 try:
-                    line = line.decode('utf-8').strip()
+                    line = line.decode('utf-8').strip() if isinstance(line, bytes) else line.strip()
                 except UnicodeDecodeError as e:
                     unicode_decode_errors += 1
                     self.logger.warning(f"Unicode decode error in stream: {e}")

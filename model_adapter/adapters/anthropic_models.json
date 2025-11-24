@@ -1,9 +1,12 @@
-[
+{
+    "version": "1.0.0",
+    "last_updated": "2025-11-24",
+    "currency": "USD",
+    "models": [
     {
         "id": "claude-3-5-sonnet-20240620",
         "name": "Claude 3.5 Sonnet",
         "max_tokens": 8192,
-        "context_window": 200000,
         "capabilities": {
             "supports_images": true,
             "supports_prompt_cache": true,
@@ -32,17 +35,10 @@
         "id": "claude-3-opus-20240229",
         "name": "Claude 3 Opus",
         "max_tokens": 4096,
-        "context_window": 200000,
         "capabilities": {
             "supports_images": true,
             "supports_prompt_cache": false,
             "supports_reasoning_budget": false
-        },
-        "pricing": {
-            "input_price": 15.0,
-            "output_price": 75.0,
-            "cache_writes_price": 0,
-            "cache_reads_price": 0
         },
         "tiers": [
             {
@@ -59,17 +55,10 @@
         "id": "claude-3-sonnet-20240229",
         "name": "Claude 3 Sonnet",
         "max_tokens": 4096,
-        "context_window": 200000,
         "capabilities": {
             "supports_images": true,
             "supports_prompt_cache": false,
             "supports_reasoning_budget": false
-        },
-        "pricing": {
-            "input_price": 3.0,
-            "output_price": 15.0,
-            "cache_writes_price": 0,
-            "cache_reads_price": 0
         },
         "tiers": [
             {
@@ -86,17 +75,10 @@
         "id": "claude-3-haiku-20240307",
         "name": "Claude 3 Haiku",
         "max_tokens": 4096,
-        "context_window": 200000,
         "capabilities": {
             "supports_images": true,
             "supports_prompt_cache": false,
             "supports_reasoning_budget": false
-        },
-        "pricing": {
-            "input_price": 0.25,
-            "output_price": 1.25,
-            "cache_writes_price": 0,
-            "cache_reads_price": 0
         },
         "tiers": [
             {
@@ -109,4 +91,5 @@
             }
         ]
     }
-]
+    ]
+}

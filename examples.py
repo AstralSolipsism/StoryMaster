@@ -79,7 +79,7 @@ async def main():
     await stream_example(scheduler)
     
     print("\n--- 3. Error Handling and Fallback Example ---")
-    await error_handling_example()
+    await error_handling_example(scheduler)
 
     print("\n--- 4. High Priority Request Example ---")
     await advanced_example(scheduler)
@@ -106,9 +106,14 @@ async def basic_chat_example(scheduler: ModelScheduler):
         if response and response.choices:
             print('Response:', response.choices[0].message.content)
             if response.usage:
-                cost = scheduler.adapters[response.model.split('/')[0] if '/' in response.model else 'anthropic'].calculate_cost(response.model, response.usage)
-                print(f"Usage: {response.usage.prompt_tokens}p + {response.usage.completion_tokens}c = {response.usage.total_tokens} tokens.")
-                # Note: Cost calculation might not be accurate if pricing info isn't perfect
+                provider_name = response.model.split('/')[0] if '/' in response.model else 'anthropic'
+                adapter = scheduler.adapters.get(provider_name)
+                if adapter:
+                    cost = adapter.calculate_cost(response.model, response.usage)
+                    print(f"Usage: {response.usage.prompt_tokens}p + {response.usage.completion_tokens}c = {response.usage.total_tokens} tokens.")
+                    # Note: Cost calculation might not be accurate if pricing info isn't perfect
+                else:
+                    print(f"Warning: Provider '{provider_name}' not found in scheduler adapters")
         else:
             print("Received no valid response.")
 
@@ -160,8 +165,9 @@ async def error_handling_example():
         max_retries=1,
     )
     
-    scheduler = ModelScheduler(scheduler_config, invalid_provider_configs)
-    await scheduler.initialize()
+    # Create a temporary scheduler for this example
+    temp_scheduler = ModelScheduler(scheduler_config, invalid_provider_configs)
+    await temp_scheduler.initialize()
 
     try:
         request_context = RequestContext(
@@ -171,7 +177,7 @@ async def error_handling_example():
         )
         
         # This should fail on 'anthropic' and fall back to 'openrouter' or 'ollama'
-        response = await scheduler.chat(request_context)
+        response = await temp_scheduler.chat(request_context)
         
         if response and response.choices:
             print(f"Fallback successful! Response from model '{response.model}':")
@@ -216,7 +222,7 @@ class BatchRequestProcessor:
         self.scheduler = scheduler
         self.concurrency = concurrency if concurrency is not None else self.DEFAULT_CONCURRENCY
     
-    async def process_batch(self, requests: List[RequestContext]) -> List[any]:
+    async def process_batch(self, requests: List[RequestContext]) -> List[Any]:
         """Processes a batch of requests concurrently."""
         semaphore = asyncio.Semaphore(self.concurrency)
         

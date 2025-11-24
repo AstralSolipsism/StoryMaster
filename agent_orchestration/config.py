@@ -15,6 +15,11 @@ from .interfaces import (
     ReasoningMode
 )
 
+# ==================== 常量定义 ====================
+MAX_CONCURRENCY_LIMIT = 10
+MAX_EXECUTION_TIME = 600
+MAX_CONFIG_ID_LENGTH = 50
+
 class ConfigurationManager(IConfigurationManager):
     """配置管理器实现"""
     
@@ -125,10 +130,10 @@ class ConfigurationManager(IConfigurationManager):
             errors.append("concurrency_limit 必须大于0")
         
         # 警告检查
-        if config.concurrency_limit > 10:
+        if config.concurrency_limit > MAX_CONCURRENCY_LIMIT:
             warnings.append("concurrency_limit 过高可能影响性能")
         
-        if config.max_execution_time > 600:
+        if config.max_execution_time > MAX_EXECUTION_TIME:
             warnings.append("max_execution_time 过长可能导致资源占用")
         
         return ValidationResult(
@@ -230,10 +235,9 @@ class ConfigurationManager(IConfigurationManager):
     
     def _is_valid_config_id(self, config_id: str) -> bool:
         """验证配置ID是否安全，防止路径遍历攻击"""
-        import re
         # 只允许字母、数字、下划线和连字符
         pattern = r'^[a-zA-Z0-9_-]+$'
-        return bool(re.match(pattern, config_id)) and len(config_id) <= 50
+        return bool(re.match(pattern, config_id)) and len(config_id) <= MAX_CONFIG_ID_LENGTH
 
 class DynamicConfigLoader:
     """动态配置加载器"""
@@ -270,8 +274,8 @@ class DynamicConfigLoader:
     async def load_from_remote(self, config_url: str) -> AgentConfig:
         """从远程服务加载配置"""
         try:
-            session = aiohttp.ClientSession()
-            try:
+            # 使用async with确保会话正确关闭
+            async with aiohttp.ClientSession() as session:
                 # 处理mock对象的情况
                 if hasattr(session, 'get') and hasattr(session.get, '__call__'):
                     response_coro = session.get(config_url)
@@ -300,12 +304,6 @@ class DynamicConfigLoader:
                     raise ValueError(f"配置验证失败: {validation_result.errors}")
                 
                 return config
-            finally:
-                # 检查session是否有close方法，并且是异步的
-                if hasattr(session, 'close') and asyncio.iscoroutinefunction(session.close):
-                    await session.close()
-                elif hasattr(session, 'close'):
-                    session.close()
             
         except Exception as e:
             self.logger.error(f"从远程加载配置失败: {e}")

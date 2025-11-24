@@ -41,13 +41,27 @@ class BaseHttpClient(ABC):
     
     async def _get_session(self) -> aiohttp.ClientSession:
         """获取 aiohttp.ClientSession"""
-        if self._session is None or self._session.closed:
+        if self._session is None:
             timeout = aiohttp.ClientTimeout(
                 total=self.config.get('timeout', 30),
                 connect=10
             )
             self._session = aiohttp.ClientSession(timeout=timeout)
         return self._session
+    
+    async def close(self) -> None:
+        """关闭HTTP客户端会话"""
+        if self._session:
+            await self._session.close()
+            self._session = None
+    
+    async def __aenter__(self):
+        """异步上下文管理器入口"""
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """异步上下文管理器出口"""
+        await self.close()
 
     async def _request(self, endpoint: str, **kwargs) -> Any:
         """发送HTTP请求"""

@@ -59,20 +59,42 @@ class AnthropicAdapter(BaseModelAdapter):
         models_file = self.config.get('anthropic_models_file', 'model_adapter/adapters/anthropic_models.json')
         try:
             with open(models_file, 'r', encoding='utf-8') as f:
-                models_data = json.load(f)
+                models_config = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
             return []
 
         models = []
+        models_data = models_config.get('models', [])
         for model_data in models_data:
+            # 从第一个tier获取pricing信息，或者使用默认值
+            tiers = model_data.get('tiers', [])
+            if tiers:
+                pricing_data = tiers[0]  # 使用第一个tier的pricing信息
+                pricing = PricingInfo(
+                    input_price=pricing_data.get('input_price', 0),
+                    output_price=pricing_data.get('output_price', 0),
+                    cache_writes_price=pricing_data.get('cache_writes_price', 0),
+                    cache_reads_price=pricing_data.get('cache_reads_price', 0)
+                )
+                context_window = pricing_data.get('context_window', 200000)
+            else:
+                # 默认pricing信息
+                pricing = PricingInfo(
+                    input_price=0,
+                    output_price=0,
+                    cache_writes_price=0,
+                    cache_reads_price=0
+                )
+                context_window = 200000
+            
             models.append(ModelInfo(
                 id=model_data['id'],
                 name=model_data['name'],
                 max_tokens=model_data['max_tokens'],
-                context_window=model_data['context_window'],
+                context_window=context_window,
                 capabilities=ModelCapabilities(**model_data['capabilities']),
-                pricing=PricingInfo(**model_data['pricing']),
-                tiers=[ServiceTier(**tier) for tier in model_data.get('tiers', [])]
+                pricing=pricing,
+                tiers=[ServiceTier(**tier) for tier in tiers]
             ))
         return models
     
@@ -97,8 +119,15 @@ class AnthropicAdapter(BaseModelAdapter):
                     raise ApiError(response.status, await response.text())
                 
                 buffer = b""
+                max_buffer_size = 10 * 1024 * 1024  # 10MB缓冲区限制
+                
                 async for chunk in response.content.iter_any():
                     buffer += chunk
+                    
+                    # 检查缓冲区大小，防止内存溢出
+                    if len(buffer) > max_buffer_size:
+                        raise RuntimeError(f"流式响应缓冲区过大: {len(buffer)} bytes")
+                    
                     while b'\n' in buffer:
                         line, buffer = buffer.split(b'\n', 1)
                         line = line.decode('utf-8').strip()
@@ -325,25 +354,32 @@ class AnthropicAdapter(BaseModelAdapter):
     def _validate_api_key(self, api_key: str) -> bool:
         """验证Anthropic API密钥格式"""
         import re
+        import os
         
         # 检查类型
         if not isinstance(api_key, str):
             return False
         
-        # 检查长度（Anthropic API密钥通常较长）
-        if len(api_key) < 10:  # 降低最小长度要求以支持测试
-            return False
+        # 检查是否为测试环境
+        is_test_env = os.environ.get('TESTING', 'false').lower() == 'true'
         
-        # 使用正则表达式验证完整格式
-        # Anthropic API密钥格式: sk-ant-api03-...
-        pattern = r'^sk-ant-api03-[a-zA-Z0-9_-]{95,}$'
-        if not re.match(pattern, api_key):
-            # 也支持旧格式 sk-...
-            old_pattern = r'^sk-[a-zA-Z0-9_-]{10,}$'  # 降低最小长度要求以支持测试
-            if not re.match(old_pattern, api_key):
-                # 支持测试格式 sk-ant-*
-                test_pattern = r'^sk-ant-[a-zA-Z0-9_-]+$'
-                if not re.match(test_pattern, api_key):
-                    return False
-        
-        return True
+        if is_test_env:
+            # 测试环境下允许较宽松的验证
+            if len(api_key) < 10:
+                return False
+            test_pattern = r'^sk-ant-[a-zA-Z0-9_-]+$'
+            return bool(re.match(test_pattern, api_key))
+        else:
+            # 生产环境下使用严格的验证
+            if len(api_key) < 20:  # 生产环境要求更长的密钥
+                return False
+            
+            # 使用正则表达式验证完整格式
+            # Anthropic API密钥格式: sk-ant-api03-...
+            pattern = r'^sk-ant-api03-[a-zA-Z0-9_-]{95,}$'
+            if not re.match(pattern, api_key):
+                # 也支持旧格式 sk-...
+                old_pattern = r'^sk-[a-zA-Z0-9_-]{20,}$'
+                return bool(re.match(old_pattern, api_key))
+            
+            return True

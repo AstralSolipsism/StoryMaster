@@ -406,7 +406,7 @@ class ModelScheduler:
         if metrics and metrics.average_latency > 0:
             return int(metrics.average_latency)
         
-        return self.config.default_latencies.get(provider_name, 3000)
+        return self.config.DEFAULT_LATENCIES.get(provider_name, 3000)
     
     def _build_request_params(self, context: RequestContext, model: str) -> Dict[str, Any]:
         """构建请求参数"""
@@ -469,6 +469,8 @@ class ModelScheduler:
                 await self._cache_cleanup_task
             except asyncio.CancelledError:
                 pass
+            except Exception as e:
+                logging.error("Error during cache cleanup task shutdown: %s", e, exc_info=True)
     
     def _is_acceptable(self, candidate: CandidateAdapter, context: RequestContext) -> bool:
         """检查候选是否可接受"""

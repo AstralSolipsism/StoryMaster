@@ -22,6 +22,7 @@ class MessageQueue:
     max_size: int = 1000
     last_access: float = field(default_factory=time.time)
     drop_oldest: bool = False  # 队列满时是否丢弃最旧的消息
+    _event: asyncio.Event = field(default_factory=asyncio.Event)
     
     def add_message(self, message: AgentMessage) -> bool:
         """添加消息到队列"""
@@ -35,6 +36,7 @@ class MessageQueue:
         
         self.messages.append(message)
         self.last_access = time.time()
+        self._event.set()  # 通知有新消息
         return True
     
     def get_message(self) -> Optional[AgentMessage]:
@@ -43,6 +45,17 @@ class MessageQueue:
             self.last_access = time.time()
             return self.messages.popleft()
         return None
+    
+    async def wait_for_message(self) -> AgentMessage:
+        """异步等待消息"""
+        while True:
+            message = self.get_message()
+            if message:
+                return message
+            
+            # 等待新消息
+            self._event.clear()
+            await self._event.wait()
     
     def peek_message(self) -> Optional[AgentMessage]:
         """查看队列中的第一条消息但不移除"""
@@ -82,8 +95,9 @@ class AgentCommunicator(ICommunicator):
         # 订阅管理
         self.subscriptions: Dict[str, List[Subscription]] = defaultdict(list)
         
-        # 消息历史 (用于调试和追踪)
-        self.message_history: List[AgentMessage] = []
+        # 消息历史 (用于调试和追踪) - 使用deque提高性能
+        from collections import deque
+        self.message_history: deque = deque(maxlen=10000)
         self.max_history_size = 10000
         # 配置选项：是否启用历史记录
         self.enable_history = enable_history
@@ -199,20 +213,16 @@ class AgentCommunicator(ICommunicator):
             return None
         
         queue = self.message_queues[agent_id]
-        start_time = time.time()
         
-        while time.time() - start_time < timeout:
-            message = queue.get_message()
-            if message:
-                self.stats['messages_delivered'] += 1
-                self.logger.debug(f"Message delivered to {agent_id}")
-                return message
-            
-            # 短暂等待
-            await asyncio.sleep(0.1)
-        
-        self.logger.debug(f"Receive timeout for agent {agent_id}")
-        return None
+        try:
+            # 使用asyncio.wait_for实现超时
+            message = await asyncio.wait_for(queue.wait_for_message(), timeout=timeout)
+            self.stats['messages_delivered'] += 1
+            self.logger.debug(f"Message delivered to {agent_id}")
+            return message
+        except asyncio.TimeoutError:
+            self.logger.debug(f"Receive timeout for agent {agent_id}")
+            return None
     
     async def broadcast_message(self, message: AgentMessage, exclude_agents: Optional[List[str]] = None) -> None:
         """广播消息"""
@@ -307,7 +317,8 @@ class AgentCommunicator(ICommunicator):
                            message_type: Optional[MessageType] = None,
                            limit: int = 100) -> List[AgentMessage]:
         """获取消息历史"""
-        history = self.message_history.copy()
+        # 将deque转换为list进行过滤
+        history = list(self.message_history)
         
         # 过滤条件
         if agent_id:
@@ -377,11 +388,8 @@ class AgentCommunicator(ICommunicator):
         if self.sanitize_history:
             message = self._sanitize_message(message)
             
+        # 使用deque自动管理大小，提高性能
         self.message_history.append(message)
-        
-        # 限制历史记录大小
-        if len(self.message_history) > self.max_history_size:
-            self.message_history = self.message_history[-self.max_history_size:]
     
     def _sanitize_message(self, message: AgentMessage) -> AgentMessage:
         """对消息进行脱敏处理，隐藏敏感信息"""

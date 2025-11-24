@@ -20,6 +20,13 @@ from .interfaces import (
     IAgent, AgentStatus
 )
 
+# ==================== 常量定义 ====================
+EXPIRED_THRESHOLD_SECONDS = 3600  # 1小时
+CLEANUP_INTERVAL_SECONDS = 60  # 清理间隔
+MAX_WORKERS_DEFAULT = 10  # 默认最大工作线程数
+TASK_QUEUE_TIMEOUT = 1.0  # 任务队列超时时间
+METRICS_HISTORY_MAXLEN = 1000  # 指标历史记录最大长度
+
 class ResourceManager(IResourceManager):
     """资源管理器实现"""
     
@@ -66,14 +73,18 @@ class ResourceManager(IResourceManager):
         """释放资源"""
         allocation_id = None
         
-        # 查找分配ID - 使用ID比较而不是对象引用比较
-        for aid, alloc in self.allocated_resources.items():
-            # 比较资源分配的关键属性而不是对象引用
-            if (alloc.cpu_cores == allocation.cpu_cores and
-                alloc.memory_mb == allocation.memory_mb and
-                alloc.gpu_memory == allocation.gpu_memory):
-                allocation_id = aid
-                break
+        # 查找分配ID - 首先尝试直接使用allocation对象中的ID（如果存在）
+        if hasattr(allocation, 'allocation_id') and allocation.allocation_id:
+            allocation_id = allocation.allocation_id
+        else:
+            # 回退到属性比较方法（保持向后兼容性）
+            for aid, alloc in self.allocated_resources.items():
+                # 比较资源分配的关键属性而不是对象引用
+                if (alloc.cpu_cores == allocation.cpu_cores and
+                    alloc.memory_mb == allocation.memory_mb and
+                    alloc.gpu_memory == allocation.gpu_memory):
+                    allocation_id = aid
+                    break
         
         if allocation_id:
             async with self.resource_locks["global"]:
@@ -120,7 +131,7 @@ class PerformanceMonitor(IPerformanceMonitor):
     
     def __init__(self):
         self.executions: Dict[str, Dict[str, Any]] = {}
-        self.metrics_history: deque = deque(maxlen=1000)
+        self.metrics_history: deque = deque(maxlen=METRICS_HISTORY_MAXLEN)
         self.execution_lock = asyncio.Lock()
         self.logger = logging.getLogger(__name__)
         
@@ -263,7 +274,7 @@ class PerformanceMonitor(IPerformanceMonitor):
             try:
                 # 定期清理过期的执行记录
                 await self._cleanup_expired_executions()
-                await asyncio.sleep(60)  # 每分钟清理一次
+                await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)  # 清理间隔
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -272,7 +283,7 @@ class PerformanceMonitor(IPerformanceMonitor):
     async def _cleanup_expired_executions(self) -> None:
         """清理过期的执行记录"""
         current_time = time.time()
-        expired_threshold = 3600  # 1小时
+        expired_threshold = EXPIRED_THRESHOLD_SECONDS
         
         async with self.execution_lock:
             expired_ids = [
@@ -289,7 +300,7 @@ class PerformanceMonitor(IPerformanceMonitor):
 class WorkerPool:
     """工作线程池"""
     
-    def __init__(self, max_workers: int = 10):
+    def __init__(self, max_workers: int = MAX_WORKERS_DEFAULT):
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
         self.semaphore = asyncio.Semaphore(max_workers)
         self.logger = logging.getLogger(__name__)
@@ -436,8 +447,12 @@ class ExecutionEngine(IExecutionEngine):
     async def batch_execute(self, tasks: List[AgentTask]) -> List[ExecutionResult]:
         """批量执行智能体任务"""
         # 并发执行所有任务
+        # 创建一个包装方法来处理单个AgentTask参数
+        async def execute_single_task(task: AgentTask) -> ExecutionResult:
+            return await self.execute_agent(task.agent, task.context, task.config)
+        
         results = await asyncio.gather(*[
-            self.execute_agent(task.agent, task.context, task.config)
+            execute_single_task(task)
             for task in tasks
         ], return_exceptions=True)
         
@@ -464,8 +479,8 @@ class ExecutionEngine(IExecutionEngine):
             try:
                 # 从队列获取任务
                 task = await asyncio.wait_for(
-                    self.task_queue.get(), 
-                    timeout=1.0
+                    self.task_queue.get(),
+                    timeout=TASK_QUEUE_TIMEOUT
                 )
                 
                 # 处理任务

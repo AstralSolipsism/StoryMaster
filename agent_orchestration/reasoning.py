@@ -23,6 +23,16 @@ class ReasoningEngineFactory(IReasoningEngineFactory):
         self._engines: Dict[str, Type[IReasoningEngine]] = {}
         self.logger = logging.getLogger(__name__)
         
+        # 安全导入白名单
+        self._allowed_import_paths = {
+            "agent_orchestration.reasoning.ChainOfThoughtEngine",
+            "agent_orchestration.reasoning.TreeOfThoughtEngine",
+            "agent_orchestration.reasoning.GraphOfThoughtEngine",
+            "agent_orchestration.reasoning.AlgorithmOfThoughtsEngine",
+            "agent_orchestration.reasoning.SkeletonOfThoughtEngine",
+            "agent_orchestration.reasoning.ReactReasoningEngine"
+        }
+        
         # 注册默认引擎
         self._register_default_engines()
     
@@ -41,6 +51,10 @@ class ReasoningEngineFactory(IReasoningEngineFactory):
         
         # 处理字符串路径导入
         if isinstance(engine_class_or_path, str):
+            # 安全检查：验证导入路径
+            if not self._is_safe_import_path(engine_class_or_path):
+                raise ValueError(f"不安全的导入路径: {engine_class_or_path}")
+            
             # 动态导入类
             module_path, class_name = engine_class_or_path.rsplit('.', 1)
             module = __import__(module_path, fromlist=[class_name])
@@ -69,6 +83,10 @@ class ReasoningEngineFactory(IReasoningEngineFactory):
         self.register_engine("algorithm_of_thoughts", "agent_orchestration.reasoning.AlgorithmOfThoughtsEngine")
         self.register_engine("skeleton_of_thought", "agent_orchestration.reasoning.SkeletonOfThoughtEngine")
         self.register_engine("react", "agent_orchestration.reasoning.ReactReasoningEngine")
+    
+    def _is_safe_import_path(self, engine_class_or_path: str) -> bool:
+        """验证导入路径是否安全"""
+        return engine_class_or_path in self._allowed_import_paths
 
 class BaseReasoningEngine(IReasoningEngine):
     """基础推理引擎"""
@@ -494,10 +512,13 @@ class ReactReasoningEngine(BaseReasoningEngine):
 _reasoning_engine_factory = None
 
 def get_reasoning_engine_factory() -> ReasoningEngineFactory:
-    """获取推理引擎工厂实例（单例模式）"""
+    """获取推理引擎工厂实例（线程安全的单例模式）"""
     global _reasoning_engine_factory
     if _reasoning_engine_factory is None:
-        _reasoning_engine_factory = ReasoningEngineFactory()
+        import threading
+        with threading.Lock():
+            if _reasoning_engine_factory is None:
+                _reasoning_engine_factory = ReasoningEngineFactory()
     return _reasoning_engine_factory
 
 async def create_reasoning_engine(mode: ReasoningMode, config: Dict[str, Any]) -> IReasoningEngine:

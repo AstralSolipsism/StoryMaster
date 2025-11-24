@@ -30,6 +30,11 @@ from agent_orchestration.react import ReActExecutor, ReActConfig
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 
+# 常量定义
+MESSAGE_PROCESSING_WAIT_TIME = 5
+EMAIL_SEND_DELAY = 0.5
+COST_THRESHOLD = 0.10
+
 # 验证API密钥
 def validate_api_keys():
     """验证API密钥是否存在且有效"""
@@ -68,7 +73,7 @@ async def example_1_basic_agent():
         default_provider='anthropic',
         fallback_providers=['openrouter', 'ollama'],
         max_retries=2,
-        cost_threshold=0.10
+        cost_threshold=COST_THRESHOLD
     )
     
     scheduler = ModelScheduler(scheduler_config, provider_configs)
@@ -157,8 +162,7 @@ async def example_2_agent_communication():
             message_type="request"
         )
         
-        # 等待一段时间让消息处理（使用常量）
-        MESSAGE_PROCESSING_WAIT_TIME = 5
+        # 等待一段时间让消息处理
         await asyncio.sleep(MESSAGE_PROCESSING_WAIT_TIME)
         
         # 查看通信统计
@@ -263,8 +267,7 @@ async def example_4_custom_tool():
         
         async def execute(self, to: str, subject: str, body: str) -> str:
             """模拟发送邮件"""
-            # 模拟发送延迟（使用常量）
-            EMAIL_SEND_DELAY = 0.5
+            # 模拟发送延迟
             await asyncio.sleep(EMAIL_SEND_DELAY)
             
             # 模拟发送结果

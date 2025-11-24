@@ -6,6 +6,8 @@ import asyncio
 import time
 import uuid
 import psutil
+import os
+import inspect
 from typing import Dict, List, Optional, Any, Callable
 from dataclasses import dataclass, field
 from collections import defaultdict, deque
@@ -16,6 +18,43 @@ from .interfaces import (
     IMonitoringScheduler, AgentTask, PerformanceMetrics,
     TaskPriority, ExecutionContext, IAgent
 )
+
+# ==================== 常量定义 ====================
+CPU_THRESHOLD = 80
+MEMORY_THRESHOLD = 85
+RESPONSE_TIME_THRESHOLD = 5.0
+FAILURE_RATE_THRESHOLD = 0.1
+CPU_CACHE_TTL = 5
+HEALTH_SCORE_THRESHOLD = 70
+
+# ==================== CPU缓存工具类 ====================
+class CpuCache:
+    """CPU使用率缓存工具类"""
+    
+    def __init__(self, cache_ttl: int = CPU_CACHE_TTL):
+        self.cpu_cache: Dict[str, float] = {}
+        self.cpu_cache_time: float = 0
+        self.cpu_cache_ttl = cache_ttl
+        self.logger = logging.getLogger(__name__)
+    
+    def get_cached_cpu_usage(self) -> float:
+        """获取缓存的CPU使用率"""
+        current_time = time.time()
+        
+        # 确保缓存属性存在
+        if not hasattr(self, 'cpu_cache_time'):
+            self.cpu_cache_time = current_time
+            self.cpu_cache['cpu_percent'] = psutil.cpu_percent()
+            self.logger.debug(f"CPU缓存已初始化: {self.cpu_cache['cpu_percent']}%")
+            return self.cpu_cache.get('cpu_percent', 0.0)
+        
+        # 检查缓存是否过期
+        if current_time - self.cpu_cache_time > self.cpu_cache_ttl:
+            self.cpu_cache_time = current_time
+            self.cpu_cache['cpu_percent'] = psutil.cpu_percent()
+            self.logger.debug(f"CPU缓存已更新: {self.cpu_cache['cpu_percent']}%")
+        
+        return self.cpu_cache.get('cpu_percent', 0.0)
 
 class SchedulingStrategy(Enum):
     """调度策略"""
@@ -52,10 +91,8 @@ class PerformanceAnalyzer:
         self.metrics_history: deque = deque(maxlen=1000)
         self.analysis_cache: Dict[str, Any] = {}
         self.cache_ttl = 60  # 缓存1分钟
-        # CPU使用率缓存
-        self.cpu_cache: Dict[str, float] = {}
-        self.cpu_cache_time: float = 0
-        self.cpu_cache_ttl = 5  # CPU缓存5秒
+        # 使用CPU缓存工具类
+        self.cpu_cache = CpuCache()
         self.logger = logging.getLogger(__name__)
     
     async def analyze_performance(self, metrics: Dict[str, Any]) -> Dict[str, Any]:
@@ -119,15 +156,15 @@ class PerformanceAnalyzer:
         bottlenecks = []
         
         # CPU瓶颈
-        if latest_metrics.get("cpu_usage", 0) > 80:
+        if latest_metrics.get("cpu_usage", 0) > CPU_THRESHOLD:
             bottlenecks.append("CPU使用率过高")
         
         # 内存瓶颈
-        if latest_metrics.get("memory_usage", 0) > 85:
+        if latest_metrics.get("memory_usage", 0) > MEMORY_THRESHOLD:
             bottlenecks.append("内存使用率过高")
         
         # 响应时间瓶颈
-        if latest_metrics.get("average_response_time", 0) > 5.0:
+        if latest_metrics.get("average_response_time", 0) > RESPONSE_TIME_THRESHOLD:
             bottlenecks.append("平均响应时间过长")
         
         # 失败率瓶颈
@@ -136,7 +173,7 @@ class PerformanceAnalyzer:
         total_tasks = completed_tasks + failed_tasks
         if total_tasks > 0:
             failure_rate = failed_tasks / total_tasks
-            if failure_rate > 0.1:
+            if failure_rate > FAILURE_RATE_THRESHOLD:
                 bottlenecks.append("任务失败率过高")
         
         return bottlenecks
@@ -222,10 +259,8 @@ class TaskScheduler:
         self.scheduled_tasks: Dict[str, ScheduledTask] = {}
         self.load_balancer = LoadBalancer()
         self.logger = logging.getLogger(__name__)
-        # CPU使用率缓存
-        self.cpu_cache: Dict[str, float] = {}
-        self.cpu_cache_time: float = 0
-        self.cpu_cache_ttl = 5  # CPU缓存5秒
+        # 使用CPU缓存工具类
+        self.cpu_cache = CpuCache()
     
     async def schedule_task(self, task: AgentTask, priority: TaskPriority = TaskPriority.NORMAL) -> str:
         """调度任务"""
@@ -313,7 +348,7 @@ class TaskScheduler:
         # 根据系统状态动态选择策略
         cpu_usage = self._get_cached_cpu_usage()
         
-        if cpu_usage > 80:
+        if cpu_usage > CPU_THRESHOLD:
             # 高负载时使用优先级调度
             self.task_queues[task.priority].append(task)
         else:
@@ -339,7 +374,7 @@ class TaskScheduler:
         # 根据当前系统状态选择任务
         cpu_usage = self._get_cached_cpu_usage()
         
-        if cpu_usage > 80:
+        if cpu_usage > CPU_THRESHOLD:
             # 高负载时优先处理高优先级任务
             return self._get_next_priority_task()
         else:
@@ -348,23 +383,7 @@ class TaskScheduler:
     
     def _get_cached_cpu_usage(self) -> float:
         """获取缓存的CPU使用率"""
-        import time
-        current_time = time.time()
-        
-        # 确保缓存属性存在
-        if not hasattr(self, 'cpu_cache_time'):
-            self.cpu_cache_time = current_time
-            self.cpu_cache['cpu_percent'] = psutil.cpu_percent()
-            self.logger.debug(f"CPU缓存已初始化: {self.cpu_cache['cpu_percent']}%")
-            return self.cpu_cache.get('cpu_percent', 0.0)
-        
-        # 检查缓存是否过期
-        if current_time - self.cpu_cache_time > self.cpu_cache_ttl:
-            self.cpu_cache_time = current_time
-            self.cpu_cache['cpu_percent'] = psutil.cpu_percent()
-            self.logger.debug(f"CPU缓存已更新: {self.cpu_cache['cpu_percent']}%")
-        
-        return self.cpu_cache.get('cpu_percent', 0.0)
+        return self.cpu_cache.get_cached_cpu_usage()
 
 class LoadBalancer:
     """负载均衡器"""
@@ -460,7 +479,6 @@ class MonitoringScheduler(IMonitoringScheduler):
     
     async def collect_metrics(self) -> Dict[str, Any]:
         """收集指标"""
-        import os
         # 使用跨平台的磁盘路径
         disk_path = os.getcwd() if os.name == 'nt' else '/'
         metrics = {
@@ -524,7 +542,6 @@ class MonitoringScheduler(IMonitoringScheduler):
             raise ValueError("指标收集器必须是可调用对象")
         
         # 检查collector的签名，但允许Mock对象（用于测试）
-        import inspect
         try:
             sig = inspect.signature(collector)
             # Mock对象可能有参数，但在实际使用中不会传递参数
@@ -562,10 +579,10 @@ class MonitoringScheduler(IMonitoringScheduler):
                 analysis = await self.analyze_performance(metrics)
                 
                 # 记录关键指标
-                if analysis["health_score"] < 70:
-                    self.logger.warning(f"系统健康分数较低: {analysis['health_score']}")
+                if analysis.get("health_score", 100) < HEALTH_SCORE_THRESHOLD:
+                    self.logger.warning(f"系统健康分数较低: {analysis.get('health_score', 0)}")
                 
-                if analysis["bottlenecks"]:
+                if analysis.get("bottlenecks"):
                     self.logger.warning(f"检测到瓶颈: {analysis['bottlenecks']}")
                 
                 await asyncio.sleep(30)  # 每30秒监控一次

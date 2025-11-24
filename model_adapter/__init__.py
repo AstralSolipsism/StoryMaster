@@ -13,6 +13,8 @@ latency, and other factors.
 
 __version__: str = "1.0.0"
 
+from typing import List
+
 # Interfaces
 from .interfaces import (
     ModelInfo,
@@ -58,4 +60,4 @@ _factory_scheduler = [
     "ModelAdapterFactory", "ModelScheduler", "SchedulerConfig", "RequestContext"
 ]
 
-__all__ = _interfaces + _base_classes + _factory_scheduler
+__all__: List[str] = _interfaces + _base_classes + _factory_scheduler

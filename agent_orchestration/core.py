@@ -425,8 +425,9 @@ class BaseAgent(IAgent):
                 if self.communicator:
                     message = await self.communicator.receive_message(self.agent_id, timeout=1.0)
                     if message:
-                        # 异步处理消息
-                        asyncio.create_task(self._handle_message_async(message))
+                        # 异步处理消息，添加异常处理
+                        task = asyncio.create_task(self._handle_message_async(message))
+                        task.add_done_callback(self._handle_message_exception)
                 
                 # 使用更短的等待时间提高响应速度
                 await asyncio.sleep(0.01)
@@ -445,6 +446,15 @@ class BaseAgent(IAgent):
                 await self.communicator.send_message(response)
         except Exception as e:
             self.logger.error(f"Async message handling error: {e}")
+    
+    def _handle_message_exception(self, task: asyncio.Task) -> None:
+        """处理异步消息任务的异常"""
+        if not task.cancelled() and task.exception():
+            try:
+                # 重新抛出异常以记录详细信息
+                task.result()
+            except Exception as e:
+                self.logger.error(f"Unhandled exception in async message task: {e}")
     
     def get_execution_history(self, limit: int = 10) -> List[Dict[str, Any]]:
         """获取执行历史"""

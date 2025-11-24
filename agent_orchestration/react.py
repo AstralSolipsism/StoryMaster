@@ -6,6 +6,7 @@ import json
 import re
 import time
 import asyncio
+import ast
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass
 
@@ -58,18 +59,21 @@ Thought: 我已经获得了北京的天气信息
 Final Answer: 北京今天晴，温度25°C，湿度60%
 """
 
+# ==================== 常量定义 ====================
+DEFAULT_MAX_ITERATIONS = 10
+DEFAULT_TIMEOUT = 300.0  # 5分钟
+DEFAULT_MAX_TOKENS = 2000
+DEFAULT_TEMPERATURE = 0.1
+TOOL_RESULT_PREFIX = "工具执行结果: "
+
 @dataclass
 class ReActConfig:
     """ReAct配置"""
-    max_iterations: int = 10
-    timeout: float = 300.0  # 5分钟
+    max_iterations: int = DEFAULT_MAX_ITERATIONS
+    timeout: float = DEFAULT_TIMEOUT
     enable_examples: bool = True
     initial_thought: str = "让我分析一下这个任务，看看需要使用什么工具来解决问题。"
     stop_phrases: List[str] = None
-    
-    # 定义常量避免魔法数字
-    DEFAULT_MAX_TOKENS: int = 2000
-    DEFAULT_TEMPERATURE: float = 0.1
     
     def __post_init__(self):
         if self.stop_phrases is None:
@@ -115,7 +119,6 @@ class ReActParser:
                 input_str = action_input_match.group(1).strip()
                 try:
                     # 使用ast.literal_eval作为更安全的替代方案
-                    import ast
                     action_input = ast.literal_eval(input_str)
                     # 确保结果是字典类型
                     if not isinstance(action_input, dict):
@@ -142,14 +145,15 @@ class ReActExecutor:
         self.config = config or ReActConfig()
         self.parser = ReActParser()
     
-    async def execute(self, 
-                     task: str, 
+    async def execute(self,
+                     task: str,
                      context: Optional[ExecutionContext] = None,
                      history: Optional[List[str]] = None) -> ReActResult:
         """执行ReAct循环"""
         start_time = time.time()
         steps = []
         history = history or []
+        iteration = 0  # 在循环前初始化iteration变量
         
         # 构建工具模式描述
         tool_schemas = self._build_tool_schemas()
@@ -229,20 +233,18 @@ class ReActExecutor:
                     tool_result = await self._execute_tool(action, action_input)
                     
                     # 记录观察步骤
-                    observation = f"工具执行结果: {tool_result.result if tool_result.success else tool_result.error_message}"
+                    observation = f"{TOOL_RESULT_PREFIX}{tool_result.result if tool_result.success else tool_result.error_message}"
                     steps.append(ReActStep(
                         step_type=ReActStepType.OBSERVATION,
                         content=observation,
                         tool_result=tool_result
                     ))
                     
-                    # 更新提示，添加观察结果（使用列表收集提高性能）
-                    prompt_parts = [prompt, f"\nObservation: {observation}\nThought: "]
-                    prompt = "".join(prompt_parts)
+                    # 更新提示，添加观察结果
+                    prompt += f"\nObservation: {observation}\nThought: "
                 else:
                     # 如果没有行动，继续思考
-                    prompt_parts = [prompt, f"\nThought: "]
-                    prompt = "".join(prompt_parts)
+                    prompt += f"\nThought: "
             
             # 达到最大迭代次数
             return ReActResult(

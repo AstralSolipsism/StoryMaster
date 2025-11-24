@@ -21,6 +21,41 @@ from .interfaces import (
     ExecutionContext, ValidationResult
 )
 
+# ==================== 路径安全验证工具类 ====================
+class PathSecurityValidator:
+    """路径安全验证工具类"""
+    
+    @staticmethod
+    def is_safe_path(path: str) -> bool:
+        """检查路径是否安全，防止路径遍历攻击"""
+        import os
+        import tempfile
+        
+        try:
+            # 规范化路径并解析所有符号链接和相对路径
+            normalized_path = os.path.realpath(path)
+            
+            # 检查规范化后的路径是否包含路径遍历字符
+            if '..' in normalized_path:
+                return False
+            
+            # 对于测试环境，允许临时目录路径
+            temp_dir = os.path.realpath(tempfile.gettempdir())
+            if normalized_path.startswith(temp_dir):
+                return True
+            
+            # 检查是否为绝对路径（在Windows上也要检查）
+            if os.path.isabs(normalized_path):
+                return False
+            
+            # 检查路径长度
+            if len(normalized_path) > 255:
+                return False
+            
+            return True
+        except (ValueError, TypeError):
+            return False
+
 class BaseTool(ITool):
     """基础工具类"""
     
@@ -91,12 +126,53 @@ class CalculatorTool(BaseTool):
         
         return operators, allowed_functions
     
+    @classmethod
+    def _eval_expression_node(cls, node, operators, allowed_functions):
+        """评估表达式节点（避免重复代码）"""
+        if isinstance(node, ast.Expression):
+            return cls._eval_expression_node(node.body, operators, allowed_functions)
+        elif isinstance(node, ast.Num):  # Python < 3.8
+            return node.n
+        elif isinstance(node, ast.Constant):  # Python >= 3.8
+            if isinstance(node.value, (int, float)):
+                return node.value
+            else:
+                raise ValueError(f"不支持的常量类型: {type(node.value)}")
+        elif isinstance(node, ast.BinOp):
+            left = cls._eval_expression_node(node.left, operators, allowed_functions)
+            right = cls._eval_expression_node(node.right, operators, allowed_functions)
+            op_type = type(node.op)
+            if op_type in operators:
+                return operators[op_type](left, right)
+            else:
+                raise ValueError(f"不支持的操作符: {op_type}")
+        elif isinstance(node, ast.UnaryOp):
+            operand = cls._eval_expression_node(node.operand, operators, allowed_functions)
+            op_type = type(node.op)
+            if op_type in operators:
+                return operators[op_type](operand)
+            else:
+                raise ValueError(f"不支持的一元操作符: {op_type}")
+        elif isinstance(node, ast.Call):
+            func_name = node.func.id if isinstance(node.func, ast.Name) else None
+            if func_name in allowed_functions:
+                args = [cls._eval_expression_node(arg, operators, allowed_functions) for arg in node.args]
+                return allowed_functions[func_name](*args)
+            else:
+                raise ValueError(f"不允许的函数: {func_name}")
+        elif isinstance(node, ast.Name):
+            if node.id in allowed_functions:
+                return allowed_functions[node.id]
+            else:
+                raise ValueError(f"不允许的变量: {node.id}")
+        else:
+            raise ValueError(f"不支持的节点类型: {type(node)}")
+    
     async def execute(self, expression: str) -> str:
         """执行数学计算"""
         try:
             # 使用更安全的表达式解析方法
             import ast
-            import operator
             
             # 提取公共的数学操作符和函数定义，避免重复代码
             operators, allowed_functions = self._get_math_operations()
@@ -105,47 +181,7 @@ class CalculatorTool(BaseTool):
             node = ast.parse(expression, mode='eval')
             
             # 评估表达式
-            def eval_node(node):
-                if isinstance(node, ast.Expression):
-                    return eval_node(node.body)
-                elif isinstance(node, ast.Num):  # Python < 3.8
-                    return node.n
-                elif isinstance(node, ast.Constant):  # Python >= 3.8
-                    if isinstance(node.value, (int, float)):
-                        return node.value
-                    else:
-                        raise ValueError(f"不支持的常量类型: {type(node.value)}")
-                elif isinstance(node, ast.BinOp):
-                    left = eval_node(node.left)
-                    right = eval_node(node.right)
-                    op_type = type(node.op)
-                    if op_type in operators:
-                        return operators[op_type](left, right)
-                    else:
-                        raise ValueError(f"不支持的操作符: {op_type}")
-                elif isinstance(node, ast.UnaryOp):
-                    operand = eval_node(node.operand)
-                    op_type = type(node.op)
-                    if op_type in operators:
-                        return operators[op_type](operand)
-                    else:
-                        raise ValueError(f"不支持的一元操作符: {op_type}")
-                elif isinstance(node, ast.Call):
-                    func_name = node.func.id if isinstance(node.func, ast.Name) else None
-                    if func_name in allowed_functions:
-                        args = [eval_node(arg) for arg in node.args]
-                        return allowed_functions[func_name](*args)
-                    else:
-                        raise ValueError(f"不允许的函数: {func_name}")
-                elif isinstance(node, ast.Name):
-                    if node.id in allowed_functions:
-                        return allowed_functions[node.id]
-                    else:
-                        raise ValueError(f"不允许的变量: {node.id}")
-                else:
-                    raise ValueError(f"不支持的节点类型: {type(node)}")
-            
-            result = eval_node(node)
+            result = self._eval_expression_node(node, operators, allowed_functions)
             return str(result)
             
         except Exception as e:
@@ -356,32 +392,7 @@ class FileSystemTool(BaseTool):
     
     def _is_safe_path(self, path: str) -> bool:
         """检查路径是否安全，防止路径遍历攻击"""
-        import os
-        try:
-            # 规范化路径
-            normalized_path = os.path.normpath(path)
-            
-            # 检查是否包含路径遍历字符
-            if '..' in path:
-                return False
-            
-            # 对于测试环境，允许临时目录路径
-            import tempfile
-            temp_dir = tempfile.gettempdir()
-            if path.startswith(temp_dir):
-                return True
-            
-            # 检查是否为绝对路径（在Windows上也要检查）
-            if os.path.isabs(path):
-                return False
-            
-            # 检查路径长度
-            if len(path) > 255:
-                return False
-            
-            return True
-        except (ValueError, TypeError):
-            return False
+        return PathSecurityValidator.is_safe_path(path)
     
     def get_schema(self) -> ToolSchema:
         return ToolSchema(
@@ -742,6 +753,9 @@ class ToolRegistry(IToolRegistry):
                 # 动态导入模块
                 module_name = py_file.stem
                 spec = importlib.util.spec_from_file_location(module_name, py_file)
+                if spec is None or spec.loader is None:
+                    self.logger.warning(f"无法创建模块规范: {py_file}")
+                    continue
                 module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(module)
                 
@@ -857,7 +871,6 @@ class EnhancedCalculatorTool(CalculatorTool):
         try:
             # 使用更安全的表达式解析方法
             import ast
-            import operator
             
             # 提取公共的数学操作符和函数定义，避免重复代码
             operators, allowed_functions = self._get_math_operations()
@@ -866,47 +879,7 @@ class EnhancedCalculatorTool(CalculatorTool):
             node = ast.parse(expression, mode='eval')
             
             # 评估表达式
-            def eval_node(node):
-                if isinstance(node, ast.Expression):
-                    return eval_node(node.body)
-                elif isinstance(node, ast.Num):  # Python < 3.8
-                    return node.n
-                elif isinstance(node, ast.Constant):  # Python >= 3.8
-                    if isinstance(node.value, (int, float)):
-                        return node.value
-                    else:
-                        raise ValueError(f"不支持的常量类型: {type(node.value)}")
-                elif isinstance(node, ast.BinOp):
-                    left = eval_node(node.left)
-                    right = eval_node(node.right)
-                    op_type = type(node.op)
-                    if op_type in operators:
-                        return operators[op_type](left, right)
-                    else:
-                        raise ValueError(f"不支持的操作符: {op_type}")
-                elif isinstance(node, ast.UnaryOp):
-                    operand = eval_node(node.operand)
-                    op_type = type(node.op)
-                    if op_type in operators:
-                        return operators[op_type](operand)
-                    else:
-                        raise ValueError(f"不支持的一元操作符: {op_type}")
-                elif isinstance(node, ast.Call):
-                    func_name = node.func.id if isinstance(node.func, ast.Name) else None
-                    if func_name in allowed_functions:
-                        args = [eval_node(arg) for arg in node.args]
-                        return allowed_functions[func_name](*args)
-                    else:
-                        raise ValueError(f"不允许的函数: {func_name}")
-                elif isinstance(node, ast.Name):
-                    if node.id in allowed_functions:
-                        return allowed_functions[node.id]
-                    else:
-                        raise ValueError(f"不允许的变量: {node.id}")
-                else:
-                    raise ValueError(f"不支持的节点类型: {type(node)}")
-            
-            result = eval_node(node)
+            result = self._eval_expression_node(node, operators, allowed_functions)
             
             # 应用精度
             if isinstance(result, float):
@@ -1023,32 +996,7 @@ class EnhancedFileSystemTool(FileSystemTool):
     
     def _is_safe_path(self, path: str) -> bool:
         """检查路径是否安全，防止路径遍历攻击"""
-        import os
-        try:
-            # 规范化路径
-            normalized_path = os.path.normpath(path)
-            
-            # 检查是否包含路径遍历字符
-            if '..' in path:
-                return False
-            
-            # 对于测试环境，允许临时目录路径
-            import tempfile
-            temp_dir = tempfile.gettempdir()
-            if path.startswith(temp_dir):
-                return True
-                
-            # 检查是否为绝对路径
-            if os.path.isabs(path):
-                return False
-                
-            # 检查路径长度
-            if len(path) > 255:
-                return False
-                
-            return True
-        except (ValueError, TypeError):
-            return False
+        return PathSecurityValidator.is_safe_path(path)
 
 # 更新工具工厂
 class EnhancedToolFactory(ToolFactory):
