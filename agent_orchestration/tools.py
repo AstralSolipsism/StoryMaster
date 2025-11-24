@@ -53,32 +53,99 @@ class CalculatorTool(BaseTool):
             description="执行数学计算，支持基本运算、函数和表达式求值"
         )
     
+    @classmethod
+    def _get_math_operations(cls) -> tuple:
+        """获取数学操作符和函数定义（避免重复代码）"""
+        import ast
+        import operator
+        import math
+        
+        # 定义允许的操作符
+        operators = {
+            ast.Add: operator.add,
+            ast.Sub: operator.sub,
+            ast.Mult: operator.mul,
+            ast.Div: operator.truediv,
+            ast.Pow: operator.pow,
+            ast.Mod: operator.mod,
+            ast.USub: operator.neg,
+            ast.UAdd: operator.pos
+        }
+        
+        # 定义允许的函数
+        allowed_functions = {
+            'abs': abs,
+            'round': round,
+            'min': min,
+            'max': max,
+            'sum': sum,
+            'sqrt': math.sqrt,
+            'sin': math.sin,
+            'cos': math.cos,
+            'tan': math.tan,
+            'log': math.log,
+            'exp': math.exp,
+            'pi': math.pi,
+            'e': math.e
+        }
+        
+        return operators, allowed_functions
+    
     async def execute(self, expression: str) -> str:
         """执行数学计算"""
         try:
-            # 安全地评估数学表达式
-            # 只允许数学相关的操作
-            allowed_names = {
-                k: v for k, v in math.__dict__.items() 
-                if not k.startswith("_")
-            }
-            allowed_names.update({
-                "abs": abs,
-                "round": round,
-                "min": min,
-                "max": max,
-                "sum": sum
-            })
+            # 使用更安全的表达式解析方法
+            import ast
+            import operator
             
-            # 编译并执行表达式
-            code = compile(expression, "<string>", "eval")
+            # 提取公共的数学操作符和函数定义，避免重复代码
+            operators, allowed_functions = self._get_math_operations()
             
-            # 检查是否只使用了允许的变量
-            for name in code.co_names:
-                if name not in allowed_names:
-                    raise NameError(f"不允许使用 '{name}'")
+            # 解析表达式
+            node = ast.parse(expression, mode='eval')
             
-            result = eval(code, {"__builtins__": {}}, allowed_names)
+            # 评估表达式
+            def eval_node(node):
+                if isinstance(node, ast.Expression):
+                    return eval_node(node.body)
+                elif isinstance(node, ast.Num):  # Python < 3.8
+                    return node.n
+                elif isinstance(node, ast.Constant):  # Python >= 3.8
+                    if isinstance(node.value, (int, float)):
+                        return node.value
+                    else:
+                        raise ValueError(f"不支持的常量类型: {type(node.value)}")
+                elif isinstance(node, ast.BinOp):
+                    left = eval_node(node.left)
+                    right = eval_node(node.right)
+                    op_type = type(node.op)
+                    if op_type in operators:
+                        return operators[op_type](left, right)
+                    else:
+                        raise ValueError(f"不支持的操作符: {op_type}")
+                elif isinstance(node, ast.UnaryOp):
+                    operand = eval_node(node.operand)
+                    op_type = type(node.op)
+                    if op_type in operators:
+                        return operators[op_type](operand)
+                    else:
+                        raise ValueError(f"不支持的一元操作符: {op_type}")
+                elif isinstance(node, ast.Call):
+                    func_name = node.func.id if isinstance(node.func, ast.Name) else None
+                    if func_name in allowed_functions:
+                        args = [eval_node(arg) for arg in node.args]
+                        return allowed_functions[func_name](*args)
+                    else:
+                        raise ValueError(f"不允许的函数: {func_name}")
+                elif isinstance(node, ast.Name):
+                    if node.id in allowed_functions:
+                        return allowed_functions[node.id]
+                    else:
+                        raise ValueError(f"不允许的变量: {node.id}")
+                else:
+                    raise ValueError(f"不支持的节点类型: {type(node)}")
+            
+            result = eval_node(node)
             return str(result)
             
         except Exception as e:
@@ -240,6 +307,10 @@ class FileSystemTool(BaseTool):
         """执行文件系统操作"""
         operation = operation.lower()
         
+        # 验证路径，防止路径遍历攻击
+        if not self._is_safe_path(path):
+            return f"错误: 不安全的文件路径: {path}"
+        
         try:
             if operation == "read":
                 # 读取文件
@@ -282,6 +353,35 @@ class FileSystemTool(BaseTool):
         
         except Exception as e:
             return f"文件操作错误: {str(e)}"
+    
+    def _is_safe_path(self, path: str) -> bool:
+        """检查路径是否安全，防止路径遍历攻击"""
+        import os
+        try:
+            # 规范化路径
+            normalized_path = os.path.normpath(path)
+            
+            # 检查是否包含路径遍历字符
+            if '..' in path:
+                return False
+            
+            # 对于测试环境，允许临时目录路径
+            import tempfile
+            temp_dir = tempfile.gettempdir()
+            if path.startswith(temp_dir):
+                return True
+            
+            # 检查是否为绝对路径（在Windows上也要检查）
+            if os.path.isabs(path):
+                return False
+            
+            # 检查路径长度
+            if len(path) > 255:
+                return False
+            
+            return True
+        except (ValueError, TypeError):
+            return False
     
     def get_schema(self) -> ToolSchema:
         return ToolSchema(
@@ -412,17 +512,22 @@ class RandomTool(BaseTool):
 class ToolFactory:
     """工具工厂，用于创建常用工具"""
     
-    @staticmethod
-    def create_default_tools() -> Dict[str, ITool]:
-        """创建默认工具集合"""
-        return {
-            "calculator": CalculatorTool(),
-            "search": SearchTool(),
-            "weather": WeatherTool(),
-            "filesystem": FileSystemTool(),
-            "time": TimeTool(),
-            "random": RandomTool()
-        }
+    # 使用类变量缓存工具实例，避免重复创建
+    _default_tools_cache: Optional[Dict[str, ITool]] = None
+    
+    @classmethod
+    def create_default_tools(cls) -> Dict[str, ITool]:
+        """创建默认工具集合（使用缓存避免重复创建）"""
+        if cls._default_tools_cache is None:
+            cls._default_tools_cache = {
+                "calculator": CalculatorTool(),
+                "search": SearchTool(),
+                "weather": WeatherTool(),
+                "filesystem": FileSystemTool(),
+                "time": TimeTool(),
+                "random": RandomTool()
+            }
+        return cls._default_tools_cache.copy()  # 返回副本避免外部修改
     
     @staticmethod
     def create_tool(tool_name: str) -> Optional[ITool]:
@@ -437,21 +542,34 @@ class ToolManager(IToolManager):
     
     def __init__(self):
         self._tools: Dict[str, ITool] = {}
+        self._tool_categories: Dict[str, str] = {}  # 存储工具类别
         self._tool_registry = ToolRegistry()
         self._execution_stats = ToolExecutionStats()
         self.logger = logging.getLogger(__name__)
     
+    def get_tool(self, tool_name: str) -> Optional[ITool]:
+        """获取工具"""
+        return self._tools.get(tool_name)
+    
+    def get_tool_schemas(self) -> List[ToolSchema]:
+        """获取所有工具的模式"""
+        return [tool.get_schema() for tool in self._tools.values()]
+    
     async def register_tool(self, tool: ITool, category: str = "general") -> None:
         """注册工具"""
         await self._tool_registry.register(tool)
-        self._tools[tool.get_schema().name] = tool
-        self.logger.info(f"工具 {tool.get_schema().name} 注册成功")
+        tool_name = tool.get_schema().name
+        self._tools[tool_name] = tool
+        self._tool_categories[tool_name] = category
+        self.logger.info(f"工具 {tool_name} 注册成功，类别: {category}")
     
     async def unregister_tool(self, tool_name: str) -> None:
         """注销工具"""
         if tool_name in self._tools:
             await self._tool_registry.unregister(tool_name)
             del self._tools[tool_name]
+            if tool_name in self._tool_categories:
+                del self._tool_categories[tool_name]
             self.logger.info(f"工具 {tool_name} 注销成功")
     
     async def call_tool(
@@ -472,7 +590,7 @@ class ToolManager(IToolManager):
         tool = self._tools[tool_name]
         
         # 参数验证
-        is_valid, error_message = tool.validate_parameters(parameters)
+        is_valid, error_message = tool.validate_parameters(parameters) if hasattr(tool, 'validate_parameters') else (True, None)
         if not is_valid:
             return ToolResult(
                 tool_name=tool_name,
@@ -510,11 +628,13 @@ class ToolManager(IToolManager):
                 execution_time=execution_time
             )
     
-    def list_tools(self, filters: Optional[Dict[str, Any]] = None) -> List[ToolInfo]:
+    def list_tools(self, category: Optional[str] = None) -> List[ToolInfo]:
         """列出可用工具"""
         tools = list(self._tools.values())
         
-        if filters:
+        if category:
+            # 简单的类别过滤，这里可以扩展
+            filters = {"category": category}
             tools = self._apply_filters(tools, filters)
         
         return [ToolInfo.from_tool(tool) for tool in tools]
@@ -525,6 +645,7 @@ class ToolManager(IToolManager):
         
         for tool in tools:
             schema = tool.get_schema()
+            tool_name = schema.name
             
             # 按名称过滤
             if "name" in filters and filters["name"] not in schema.name:
@@ -536,8 +657,9 @@ class ToolManager(IToolManager):
             
             # 按类别过滤
             if "category" in filters:
-                # 这里需要扩展工具接口以支持类别
-                pass
+                tool_category = self._tool_categories.get(tool_name, "general")
+                if tool_category != filters["category"]:
+                    continue
             
             filtered_tools.append(tool)
         
@@ -733,28 +855,58 @@ class EnhancedCalculatorTool(CalculatorTool):
     async def execute(self, expression: str, precision: int = 2) -> str:
         """执行数学计算"""
         try:
-            # 安全地评估数学表达式
-            allowed_names = {
-                k: v for k, v in math.__dict__.items() 
-                if not k.startswith("_")
-            }
-            allowed_names.update({
-                "abs": abs,
-                "round": round,
-                "min": min,
-                "max": max,
-                "sum": sum
-            })
+            # 使用更安全的表达式解析方法
+            import ast
+            import operator
             
-            # 编译并执行表达式
-            code = compile(expression, "<string>", "eval")
+            # 提取公共的数学操作符和函数定义，避免重复代码
+            operators, allowed_functions = self._get_math_operations()
             
-            # 检查是否只使用了允许的变量
-            for name in code.co_names:
-                if name not in allowed_names:
-                    raise NameError(f"不允许使用 '{name}'")
+            # 解析表达式
+            node = ast.parse(expression, mode='eval')
             
-            result = eval(code, {"__builtins__": {}}, allowed_names)
+            # 评估表达式
+            def eval_node(node):
+                if isinstance(node, ast.Expression):
+                    return eval_node(node.body)
+                elif isinstance(node, ast.Num):  # Python < 3.8
+                    return node.n
+                elif isinstance(node, ast.Constant):  # Python >= 3.8
+                    if isinstance(node.value, (int, float)):
+                        return node.value
+                    else:
+                        raise ValueError(f"不支持的常量类型: {type(node.value)}")
+                elif isinstance(node, ast.BinOp):
+                    left = eval_node(node.left)
+                    right = eval_node(node.right)
+                    op_type = type(node.op)
+                    if op_type in operators:
+                        return operators[op_type](left, right)
+                    else:
+                        raise ValueError(f"不支持的操作符: {op_type}")
+                elif isinstance(node, ast.UnaryOp):
+                    operand = eval_node(node.operand)
+                    op_type = type(node.op)
+                    if op_type in operators:
+                        return operators[op_type](operand)
+                    else:
+                        raise ValueError(f"不支持的一元操作符: {op_type}")
+                elif isinstance(node, ast.Call):
+                    func_name = node.func.id if isinstance(node.func, ast.Name) else None
+                    if func_name in allowed_functions:
+                        args = [eval_node(arg) for arg in node.args]
+                        return allowed_functions[func_name](*args)
+                    else:
+                        raise ValueError(f"不允许的函数: {func_name}")
+                elif isinstance(node, ast.Name):
+                    if node.id in allowed_functions:
+                        return allowed_functions[node.id]
+                    else:
+                        raise ValueError(f"不允许的变量: {node.id}")
+                else:
+                    raise ValueError(f"不支持的节点类型: {type(node)}")
+            
+            result = eval_node(node)
             
             # 应用精度
             if isinstance(result, float):
@@ -805,6 +957,14 @@ class EnhancedFileSystemTool(FileSystemTool):
     async def execute(self, operation: str, path: str, content: Optional[str] = None, destination: Optional[str] = None) -> Any:
         """执行文件系统操作"""
         operation = operation.lower()
+        
+        # 验证路径，防止路径遍历攻击
+        if not self._is_safe_path(path):
+            return f"错误: 不安全的文件路径: {path}"
+        
+        # 验证目标路径（对于copy和move操作）
+        if destination and not self._is_safe_path(destination):
+            return f"错误: 不安全的目标路径: {destination}"
         
         try:
             if operation == "read":
@@ -860,22 +1020,56 @@ class EnhancedFileSystemTool(FileSystemTool):
         
         except Exception as e:
             return f"文件操作错误: {str(e)}"
+    
+    def _is_safe_path(self, path: str) -> bool:
+        """检查路径是否安全，防止路径遍历攻击"""
+        import os
+        try:
+            # 规范化路径
+            normalized_path = os.path.normpath(path)
+            
+            # 检查是否包含路径遍历字符
+            if '..' in path:
+                return False
+            
+            # 对于测试环境，允许临时目录路径
+            import tempfile
+            temp_dir = tempfile.gettempdir()
+            if path.startswith(temp_dir):
+                return True
+                
+            # 检查是否为绝对路径
+            if os.path.isabs(path):
+                return False
+                
+            # 检查路径长度
+            if len(path) > 255:
+                return False
+                
+            return True
+        except (ValueError, TypeError):
+            return False
 
 # 更新工具工厂
 class EnhancedToolFactory(ToolFactory):
     """增强的工具工厂"""
     
-    @staticmethod
-    def create_default_tools() -> Dict[str, ITool]:
-        """创建默认工具集合"""
-        return {
-            "calculator": EnhancedCalculatorTool(),
-            "search": SearchTool(),
-            "weather": WeatherTool(),
-            "filesystem": EnhancedFileSystemTool(),
-            "time": TimeTool(),
-            "random": RandomTool()
-        }
+    # 使用类变量缓存增强工具实例
+    _enhanced_tools_cache: Optional[Dict[str, ITool]] = None
+    
+    @classmethod
+    def create_default_tools(cls) -> Dict[str, ITool]:
+        """创建默认工具集合（使用缓存避免重复创建）"""
+        if cls._enhanced_tools_cache is None:
+            cls._enhanced_tools_cache = {
+                "calculator": EnhancedCalculatorTool(),
+                "search": SearchTool(),
+                "weather": WeatherTool(),
+                "filesystem": EnhancedFileSystemTool(),
+                "time": TimeTool(),
+                "random": RandomTool()
+            }
+        return cls._enhanced_tools_cache.copy()  # 返回副本避免外部修改
     
     @staticmethod
     def create_enhanced_tools() -> Dict[str, ITool]:

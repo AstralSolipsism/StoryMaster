@@ -3,6 +3,7 @@ import aiohttp
 import json
 import time
 import logging
+import uuid
 from typing import AsyncIterable, Dict, Any, List, Optional
 
 from ..base import BaseModelAdapter, ApiError
@@ -41,7 +42,14 @@ class OllamaAdapter(BaseModelAdapter):
             response = await self._request('/api/tags', method='GET')
             
             models = []
-            tasks = [self._request('/api/show', body={'name': model_data['name']}, method='POST') for model_data in response.get('models', [])]
+            # 使用信号量限制并发请求数量，防止资源耗尽
+            semaphore = asyncio.Semaphore(10)  # 限制最多10个并发请求
+            
+            async def _limited_request(semaphore, model_name):
+                async with semaphore:
+                    return await self._request('/api/show', body={'name': model_name}, method='POST')
+            
+            tasks = [_limited_request(semaphore, model_data['name']) for model_data in response.get('models', [])]
             details_list = await asyncio.gather(*tasks)
 
             for model_data, details in zip(response.get('models', []), details_list):
@@ -88,7 +96,7 @@ class OllamaAdapter(BaseModelAdapter):
                     raise ApiError(response.status, await response.text())
                 
                 async for line in response.content:
-                    line = line.decode('utf-8').strip()
+                    line = line.decode('utf-8', errors='replace').strip()
                     if line:
                         try:
                             parsed = json.loads(line)
@@ -125,7 +133,7 @@ class OllamaAdapter(BaseModelAdapter):
             finish_reason='stop' if response.get('done') else 'length'
         )
         return ApiResponse(
-            id=f"ollama-{int(time.time())}",
+            id=f"ollama-{uuid.uuid4()}",
             object='chat.completion',
             created=int(time.time()),
             model=model,
@@ -140,7 +148,7 @@ class OllamaAdapter(BaseModelAdapter):
     def _transform_chunk(self, chunk: Dict[str, Any]) -> ChatChunk:
         """转换流式响应块"""
         return ChatChunk(
-            id=f"ollama-chunk-{int(time.time())}",
+            id=f"ollama-chunk-{uuid.uuid4()}",
             object='chat.completion.chunk',
             created=int(time.time()),
             model=chunk.get('model'),

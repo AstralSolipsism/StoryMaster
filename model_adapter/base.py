@@ -51,7 +51,9 @@ class BaseHttpClient(ABC):
 
     async def _request(self, endpoint: str, **kwargs) -> Any:
         """发送HTTP请求"""
-        url = f"{self.base_url}{endpoint}"
+        # 使用更安全的URL构建方法
+        from urllib.parse import urljoin
+        url = urljoin(self.base_url, endpoint)
         request_options = self._create_request_options(
             kwargs.get('body'),
             kwargs.get('headers')
@@ -71,16 +73,23 @@ class BaseHttpClient(ABC):
                     error_text = await response.text()
                     raise ApiError(response.status, error_text)
                 
-                return await response.json()
-        except asyncio.TimeoutError:
+                # 添加JSON解析错误处理
+                try:
+                    return await response.json()
+                except Exception as e:
+                    raise ApiError(500, f"JSON解析错误: {str(e)}")
+        except (asyncio.TimeoutError, aiohttp.ServerTimeoutError):
             raise ApiError(408, "Request timeout")
+        except aiohttp.ClientError as e:
+            raise ApiError(500, f"客户端错误: {str(e)}")
     
     def _create_request_options(self, body: Any, custom_headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         """创建请求选项"""
+        # 移除重复的timeout设置，统一在_get_session中管理
         return {
             'headers': {**self.default_headers, **(custom_headers or {})},
             'body': body,
-            'timeout': self.config.get('timeout', 30),
+            'timeout': None  # timeout在_get_session中管理
         }
 
 class BaseModelAdapter(BaseHttpClient, IModelAdapter):
@@ -93,8 +102,14 @@ class BaseModelAdapter(BaseHttpClient, IModelAdapter):
     async def get_models(self) -> List[ModelInfo]:
         """获取支持的模型列表"""
         if not self.models:
-            models = await self._fetch_models()
-            self.models = {model.id: model for model in models}
+            # 添加并发控制，防止重复请求
+            if not hasattr(self, '_models_lock'):
+                self._models_lock = asyncio.Lock()
+            
+            async with self._models_lock:
+                if not self.models:  # 双重检查
+                    models = await self._fetch_models()
+                    self.models = {model.id: model for model in models}
         return list(self.models.values())
     
     def _get_model(self, model_id: str) -> Optional[ModelInfo]:
@@ -123,15 +138,24 @@ class BaseModelAdapter(BaseHttpClient, IModelAdapter):
         if not model_info.pricing or not usage:
             return 0.0
         
+        # 添加pricing字段的空值检查
+        if not model_info.pricing:
+            return 0.0
+            
         pricing = model_info.pricing
-        input_cost = (usage.prompt_tokens / 1_000_000) * pricing.input_price
-        output_cost = (usage.completion_tokens / 1_000_000) * pricing.output_price
+        input_price = pricing.input_price or 0.0
+        output_price = pricing.output_price or 0.0
+        cache_writes_price = pricing.cache_writes_price or 0.0
+        cache_reads_price = pricing.cache_reads_price or 0.0
+        
+        input_cost = (usage.prompt_tokens / 1_000_000) * input_price
+        output_cost = (usage.completion_tokens / 1_000_000) * output_price
         
         cache_cost = 0.0
-        if usage.cache_creation_input_tokens and pricing.cache_writes_price:
-            cache_cost += (usage.cache_creation_input_tokens / 1_000_000) * pricing.cache_writes_price
-        if usage.cache_read_input_tokens and pricing.cache_reads_price:
-            cache_cost += (usage.cache_read_input_tokens / 1_000_000) * pricing.cache_reads_price
+        if usage.cache_creation_input_tokens and cache_writes_price:
+            cache_cost += (usage.cache_creation_input_tokens / 1_000_000) * cache_writes_price
+        if usage.cache_read_input_tokens and cache_reads_price:
+            cache_cost += (usage.cache_read_input_tokens / 1_000_000) * cache_reads_price
         
         return input_cost + output_cost + cache_cost
     
@@ -141,16 +165,20 @@ class BaseModelAdapter(BaseHttpClient, IModelAdapter):
         if not model_info:
             return 4096
         
+        # 添加model_info的空值检查
+        if not model_info.capabilities:
+            return model_info.max_tokens or 4096
+        
         # 检查是否使用推理预算
         if self._should_use_reasoning_budget(model_info, config):
             return config.get('model_max_tokens', 16384) if config else 16384
         
         # 检查是否为Anthropic风格的混合推理模型
-        if (model_info.capabilities.supports_reasoning_budget and 
+        if (model_info.capabilities.supports_reasoning_budget and
             self._is_anthropic_style()):
             return 8192
         
-        return model_info.max_tokens
+        return model_info.max_tokens or 4096
     
     # 抽象方法，子类必须实现
     @abstractmethod

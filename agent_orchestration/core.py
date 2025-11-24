@@ -50,50 +50,68 @@ class BaseAgent(IAgent):
         self._capabilities = capabilities or AgentCapabilities()
         self._status = AgentStatus.IDLE
         
-        # 系统提示
+        # 初始化各个组件
+        self._init_system_prompt(system_prompt, agent_id)
+        self._init_reasoning_engine()
+        self._init_react_executor(model_scheduler, tool_manager)
+        self._init_execution_history()
+        self._init_message_processing()
+        
+        self.logger = logging.getLogger(f"{__name__}.{agent_id}")
+    
+    def _init_system_prompt(self, system_prompt: Optional[str], agent_id: str) -> None:
+        """初始化系统提示"""
         if system_prompt:
             self.system_prompt = system_prompt
-        elif config and hasattr(config, 'system_prompt'):
-            self.system_prompt = config.system_prompt
+        elif self.config and hasattr(self.config, 'system_prompt'):
+            self.system_prompt = self.config.system_prompt
         else:
             self.system_prompt = f"你是一个智能助手，ID为 {agent_id}。"
-        
-        # 推理引擎
+    
+    def _init_reasoning_engine(self) -> None:
+        """初始化推理引擎"""
         self.reasoning_engine: Optional[IReasoningEngine] = None
-        
-        # ReAct执行器（向后兼容）
+    
+    def _init_react_executor(self, model_scheduler: Optional[ModelScheduler],
+                           tool_manager: Optional[IToolManager]) -> None:
+        """初始化ReAct执行器"""
         self.react_executor = None
         if model_scheduler and tool_manager:
             # 获取工具字典
-            tools_dict = {}
-            if hasattr(tool_manager, 'tools'):
-                tools_dict = tool_manager.tools
-            elif hasattr(tool_manager, '_tools'):
-                tools_dict = tool_manager._tools
-            else:
-                # 尝试通过list_tools方法获取工具
-                try:
-                    tool_infos = tool_manager.list_tools()
-                    for tool_info in tool_infos:
-                        if hasattr(tool_info, 'name') and hasattr(tool_info, 'tool'):
-                            tools_dict[tool_info.name] = tool_info.tool
-                except:
-                    pass
+            tools_dict = self._get_tools_dict(tool_manager)
             
             self.react_executor = ReActExecutor(
                 model_scheduler=model_scheduler,
                 tools=tools_dict,
                 config=ReActConfig()
             )
-        
-        # 执行历史
+    
+    def _get_tools_dict(self, tool_manager: IToolManager) -> Dict[str, ITool]:
+        """获取工具字典"""
+        tools_dict = {}
+        if hasattr(tool_manager, 'tools'):
+            tools_dict = tool_manager.tools
+        elif hasattr(tool_manager, '_tools'):
+            tools_dict = tool_manager._tools
+        else:
+            # 尝试通过list_tools方法获取工具
+            try:
+                tool_infos = tool_manager.list_tools()
+                for tool_info in tool_infos:
+                    if hasattr(tool_info, 'name') and hasattr(tool_info, 'tool'):
+                        tools_dict[tool_info.name] = tool_info.tool
+            except Exception as e:
+                self.logger.warning(f"Failed to get tools from tool_manager: {e}")
+        return tools_dict
+    
+    def _init_execution_history(self) -> None:
+        """初始化执行历史"""
         self.execution_history: List[Dict[str, Any]] = []
-        
-        # 消息处理任务
+    
+    def _init_message_processing(self) -> None:
+        """初始化消息处理"""
         self._message_task: Optional[asyncio.Task] = None
         self._running = False
-        
-        self.logger = logging.getLogger(f"{__name__}.{agent_id}")
     
     @property
     def agent_id(self) -> str:
@@ -244,10 +262,10 @@ class BaseAgent(IAgent):
             }
             
             # 选择执行策略
-            if self.reasoning_engine and self.tool_manager:
+            if self.reasoning_engine and self.tool_manager and self._capabilities.can_use_tools:
                 # 使用新的推理引擎
                 result = await self._execute_with_reasoning_engine(task, context)
-            elif self.react_executor and self.tool_manager:
+            elif self.react_executor and self.tool_manager and self._capabilities.can_use_tools:
                 # 使用ReAct执行器（向后兼容）
                 result = await self._execute_with_react(task, context)
             elif self.execution_engine:
@@ -355,8 +373,8 @@ class BaseAgent(IAgent):
         # 调用模型
         request_context = RequestContext(
             messages=messages,
-            max_tokens=2000,
-            temperature=0.7
+            max_tokens=self.config.max_tokens if self.config else 2000,
+            temperature=self.config.temperature if self.config else 0.7
         )
         
         response = await self.model_scheduler.chat(request_context)
@@ -410,7 +428,8 @@ class BaseAgent(IAgent):
                         # 异步处理消息
                         asyncio.create_task(self._handle_message_async(message))
                 
-                await asyncio.sleep(0.1)
+                # 使用更短的等待时间提高响应速度
+                await asyncio.sleep(0.01)
                 
             except asyncio.CancelledError:
                 break

@@ -21,12 +21,17 @@ class MessageQueue:
     messages: deque = field(default_factory=deque)
     max_size: int = 1000
     last_access: float = field(default_factory=time.time)
+    drop_oldest: bool = False  # 队列满时是否丢弃最旧的消息
     
     def add_message(self, message: AgentMessage) -> bool:
         """添加消息到队列"""
         if len(self.messages) >= self.max_size:
-            # 移除最旧的消息
-            self.messages.popleft()
+            if self.drop_oldest:
+                # 队列已满，移除最旧的消息并添加新消息
+                self.messages.popleft()
+            else:
+                # 队列已满，拒绝新消息
+                return False
         
         self.messages.append(message)
         self.last_access = time.time()
@@ -60,16 +65,18 @@ class Subscription:
 class AgentCommunicator(ICommunicator):
     """智能体通信器实现"""
     
-    def __init__(self, max_queue_size: int = 1000, message_timeout: float = 300.0):
+    def __init__(self, max_queue_size: int = 1000, message_timeout: float = 300.0,
+                 enable_history: bool = True, sanitize_history: bool = True):
         self.max_queue_size = max_queue_size
         self.message_timeout = message_timeout
         
-        # 智能体注册表
+        # 智能体注册表 - 使用集合跟踪已注册的ID
         self.registered_agents: Dict[str, IAgent] = {}
+        self.registered_agent_ids: Set[str] = set()
         
         # 消息队列 (每个智能体一个队列)
         self.message_queues: Dict[str, MessageQueue] = defaultdict(
-            lambda: MessageQueue(max_size=max_queue_size)
+            lambda: MessageQueue(max_size=max_queue_size, drop_oldest=True)
         )
         
         # 订阅管理
@@ -78,6 +85,10 @@ class AgentCommunicator(ICommunicator):
         # 消息历史 (用于调试和追踪)
         self.message_history: List[AgentMessage] = []
         self.max_history_size = 10000
+        # 配置选项：是否启用历史记录
+        self.enable_history = enable_history
+        # 配置选项：是否对敏感信息进行脱敏
+        self.sanitize_history = sanitize_history
         
         # 统计信息
         self.stats = {
@@ -117,13 +128,15 @@ class AgentCommunicator(ICommunicator):
         
         self.logger.info("AgentCommunicator stopped")
     
-    async def register_agent(self, agent_id: str) -> None:
+    async def register_agent(self, agent_id: str, agent: Optional[IAgent] = None) -> None:
         """注册智能体"""
-        if agent_id not in self.registered_agents:
+        if agent_id not in self.registered_agent_ids:
             # 创建消息队列
-            self.message_queues[agent_id] = MessageQueue(max_size=self.max_queue_size)
+            self.message_queues[agent_id] = MessageQueue(max_size=self.max_queue_size, drop_oldest=True)
             # 将代理添加到注册表
-            self.registered_agents[agent_id] = None  # 这里可以存储实际的代理对象
+            self.registered_agents[agent_id] = agent
+            # 添加到ID集合
+            self.registered_agent_ids.add(agent_id)
             self.logger.info(f"Agent {agent_id} registered")
     
     async def unregister_agent(self, agent_id: str) -> None:
@@ -139,6 +152,9 @@ class AgentCommunicator(ICommunicator):
         # 从注册表中移除
         if agent_id in self.registered_agents:
             del self.registered_agents[agent_id]
+        
+        # 从ID集合中移除
+        self.registered_agent_ids.discard(agent_id)
         
         self.logger.info(f"Agent {agent_id} unregistered")
     
@@ -321,11 +337,19 @@ class AgentCommunicator(ICommunicator):
         """获取统计信息"""
         return {
             **self.stats,
-            "registered_agents": len(self.registered_agents),
+            "registered_agents": len(self.registered_agent_ids),
             "active_queues": len(self.message_queues),
             "total_subscriptions": sum(len(subs) for subs in self.subscriptions.values()),
             "history_size": len(self.message_history)
         }
+    
+    def is_agent_registered(self, agent_id: str) -> bool:
+        """检查智能体是否已注册"""
+        return agent_id in self.registered_agent_ids
+    
+    def get_registered_agent(self, agent_id: str) -> Optional[IAgent]:
+        """获取已注册的智能体对象"""
+        return self.registered_agents.get(agent_id)
     
     def _should_deliver_message(self, message: AgentMessage) -> bool:
         """检查是否应该投递消息"""
@@ -345,11 +369,65 @@ class AgentCommunicator(ICommunicator):
     
     def _add_to_history(self, message: AgentMessage) -> None:
         """添加消息到历史记录"""
+        # 检查是否启用历史记录
+        if not self.enable_history:
+            return
+            
+        # 对敏感信息进行脱敏处理
+        if self.sanitize_history:
+            message = self._sanitize_message(message)
+            
         self.message_history.append(message)
         
         # 限制历史记录大小
         if len(self.message_history) > self.max_history_size:
             self.message_history = self.message_history[-self.max_history_size:]
+    
+    def _sanitize_message(self, message: AgentMessage) -> AgentMessage:
+        """对消息进行脱敏处理，隐藏敏感信息"""
+        import re
+        
+        # 创建消息副本
+        sanitized_content = message.content
+        
+        # 如果内容是字符串，进行脱敏处理
+        if isinstance(sanitized_content, str):
+            # 脱敏API密钥模式
+            sanitized_content = re.sub(r'(sk-[a-zA-Z0-9]{20,})', 'sk-***', sanitized_content)
+            # 脱敏密码模式
+            sanitized_content = re.sub(r'(["\']?password["\']?\s*[:=]\s*["\']?)([^"\']\s]+)', r'\1***', sanitized_content, flags=re.IGNORECASE)
+            # 脱敏邮箱
+            sanitized_content = re.sub(r'([a-zA-Z0-9._%+-]+)@([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', r'***@\2', sanitized_content)
+            # 脱敏IP地址
+            sanitized_content = re.sub(r'\b(\d{1,3}\.){3}\d{1,3}\b', '***.***.***.***', sanitized_content)
+            # 脱敏URL中的敏感参数
+            sanitized_content = re.sub(r'([?&](api_key|token|password)=)[^&\s]+', r'\1***', sanitized_content, flags=re.IGNORECASE)
+        
+        # 创建脱敏后的消息
+        return AgentMessage(
+            sender_id=message.sender_id,
+            receiver_id=message.receiver_id,
+            message_type=message.message_type,
+            content=sanitized_content,
+            timestamp=message.timestamp,
+            correlation_id=message.correlation_id,
+            metadata=message.metadata.copy()
+        )
+    
+    def set_history_config(self, enable_history: bool = None, sanitize_history: bool = None) -> None:
+        """设置历史记录配置"""
+        if enable_history is not None:
+            self.enable_history = enable_history
+            self.logger.info(f"消息历史记录已{'启用' if enable_history else '禁用'}")
+            
+        if sanitize_history is not None:
+            self.sanitize_history = sanitize_history
+            self.logger.info(f"消息历史脱敏已{'启用' if sanitize_history else '禁用'}")
+    
+    def clear_history(self) -> None:
+        """清空消息历史记录"""
+        self.message_history.clear()
+        self.logger.info("消息历史记录已清空")
     
     async def _cleanup_loop(self) -> None:
         """清理循环"""

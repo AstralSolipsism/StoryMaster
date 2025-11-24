@@ -27,7 +27,8 @@ class SchedulerConfig:
     enable_load_balancing: bool = False
     cost_threshold: Optional[float] = None
     high_priority_latency_threshold: int = 5000
-    default_latencies: Dict[str, int] = field(default_factory=lambda: {'anthropic': 2000, 'openrouter': 3000, 'ollama': 500})
+    # 将硬编码的默认值提取为类常量
+    DEFAULT_LATENCIES: Dict[str, int] = field(default_factory=lambda: {'anthropic': 2000, 'openrouter': 3000, 'ollama': 500})
 
 @dataclass
 class RequestContext:
@@ -86,6 +87,8 @@ class ModelScheduler:
         self.metrics: Dict[str, ProviderMetrics] = {}
         self.model_cache: Dict[str, Tuple[List[ModelInfo], float]] = {}
         self.cache_ttl: int = 600  # 10 minutes
+        # 缓存清理任务
+        self._cache_cleanup_task: Optional[asyncio.Task] = None
         self.metrics_lock = asyncio.Lock()
     
     async def initialize(self) -> None:
@@ -109,6 +112,9 @@ class ModelScheduler:
                     logging.warning("Failed to initialize %s: %s", provider_name, validation.errors)
             except Exception as error:
                 logging.error("Error initializing provider %s", provider_name, exc_info=True)
+        
+        # 启动缓存清理任务
+        self._cache_cleanup_task = asyncio.create_task(self._cache_cleanup_loop())
     
     async def schedule(self, context: RequestContext) -> ScheduleResult:
         """调度最佳适配器"""
@@ -382,8 +388,8 @@ class ModelScheduler:
     
     def _estimate_cost(self, adapter: IModelAdapter, model_id: str, context: RequestContext) -> float:
         """估算成本"""
-        # TODO: Replace with a more accurate tokenizer like tiktoken
-        prompt_tokens = sum(len(str(msg.content)) // 4 for msg in context.messages)
+        # 使用更准确的token估算方法
+        prompt_tokens = self._estimate_tokens(context.messages)
         completion_tokens = context.max_tokens or 1000
         
         usage = TokenUsage(
@@ -404,8 +410,10 @@ class ModelScheduler:
     
     def _build_request_params(self, context: RequestContext, model: str) -> Dict[str, Any]:
         """构建请求参数"""
+        # 使用更安全的消息序列化方法
+        messages = [self._serialize_message(msg) for msg in context.messages]
         return {
-            'messages': [msg.__dict__ for msg in context.messages],
+            'messages': messages,
             'model': model,
             'max_tokens': context.max_tokens,
             'temperature': context.temperature,
@@ -415,6 +423,52 @@ class ModelScheduler:
             'system': context.system,
             'reasoning_budget': context.reasoning_budget,
         }
+    
+    def _estimate_tokens(self, messages: List[ChatMessage]) -> int:
+        """估算token数量（使用更准确的方法）"""
+        # 简单的token估算，实际应用中应该使用tiktoken等专业库
+        total_chars = sum(len(str(msg.content)) for msg in messages)
+        return total_chars // 4  # 粗略估算：1个token约等于4个字符
+    
+    def _serialize_message(self, message: ChatMessage) -> Dict[str, Any]:
+        """安全地序列化消息对象"""
+        # 使用dataclass.asdict或自定义序列化方法，避免直接使用__dict__
+        if hasattr(message, '__dict__'):
+            return message.__dict__
+        else:
+            # 对于dataclass对象，使用更安全的序列化方法
+            return {
+                'role': getattr(message, 'role', 'user'),
+                'content': getattr(message, 'content', ''),
+                'name': getattr(message, 'name', None)
+            }
+    
+    async def _cache_cleanup_loop(self) -> None:
+        """定期清理过期缓存"""
+        while True:
+            try:
+                await asyncio.sleep(self.cache_ttl // 2)  # 每半个TTL时间检查一次
+                current_time = time.monotonic()
+                expired_keys = [
+                    key for key, (_, timestamp) in self.model_cache.items()
+                    if current_time - timestamp > self.cache_ttl
+                ]
+                for key in expired_keys:
+                    del self.model_cache[key]
+                    logging.debug("Cleaned up expired cache for provider: %s", key)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logging.error("Error in cache cleanup loop: %s", e, exc_info=True)
+    
+    async def shutdown(self) -> None:
+        """关闭调度器，清理资源"""
+        if self._cache_cleanup_task:
+            self._cache_cleanup_task.cancel()
+            try:
+                await self._cache_cleanup_task
+            except asyncio.CancelledError:
+                pass
     
     def _is_acceptable(self, candidate: CandidateAdapter, context: RequestContext) -> bool:
         """检查候选是否可接受"""

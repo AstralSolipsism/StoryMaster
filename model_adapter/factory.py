@@ -51,7 +51,7 @@ class ModelAdapterFactory:
             raise ValueError(f"Unknown provider: {provider_name}")
         
         # Merge default and user-provided config
-        # Note: This is a shallow merge. A deep merge might be needed for nested configs.
+        # Note: This is a deep merge for nested configs.
         merged_config_dict = cls._deep_merge_configs(adapter_info.default_config, config)
         merged_config = ProviderConfig(**merged_config_dict)
         
@@ -84,7 +84,8 @@ class ModelAdapterFactory:
     @classmethod
     def get_adapter_info(cls, provider_name: str) -> Optional[AdapterInfo]:
         """获取适配器信息"""
-        return cls._registry.get(provider_name)
+        with cls._lock:
+            return cls._registry.get(provider_name)
     
     @classmethod
     def validate_config(cls, provider_name: str, config: ProviderConfig) -> ValidationResult:
@@ -110,28 +111,30 @@ class ModelAdapterFactory:
         return merged
 # Register all adapters
 def register_all_adapters():
-    if 'anthropic' not in ModelAdapterFactory._registry:
-        ModelAdapterFactory.register_adapter(
-            'anthropic',
-            AnthropicAdapter,
-            ProviderConfig(timeout=30, max_retries=3)
-        )
+    """注册所有适配器（使用锁保护整个操作）"""
+    with ModelAdapterFactory._lock:
+        if 'anthropic' not in ModelAdapterFactory._registry:
+            ModelAdapterFactory.register_adapter(
+                'anthropic',
+                AnthropicAdapter,
+                ProviderConfig(timeout=30, max_retries=3)
+            )
 
-    if 'openrouter' not in ModelAdapterFactory._registry:
-        ModelAdapterFactory.register_adapter(
-            'openrouter',
-            OpenRouterAdapter,
-            ProviderConfig(timeout=30, max_retries=3),
-            is_dynamic=True
-        )
+        if 'openrouter' not in ModelAdapterFactory._registry:
+            ModelAdapterFactory.register_adapter(
+                'openrouter',
+                OpenRouterAdapter,
+                ProviderConfig(timeout=30, max_retries=3),
+                is_dynamic=True
+            )
 
-    if 'ollama' not in ModelAdapterFactory._registry:
-        ModelAdapterFactory.register_adapter(
-            'ollama',
-            OllamaAdapter,
-            ProviderConfig(timeout=60, max_retries=1),
-            is_local=True
-        )
+        if 'ollama' not in ModelAdapterFactory._registry:
+            ModelAdapterFactory.register_adapter(
+                'ollama',
+                OllamaAdapter,
+                ProviderConfig(timeout=60, max_retries=1),
+                is_local=True
+            )
 
 # The user of the library is now responsible for calling this.
 # register_all_adapters()

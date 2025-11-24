@@ -7,9 +7,9 @@ import os
 from typing import Dict, Any
 
 from model_adapter import (
-    ModelScheduler, 
-    SchedulerConfig, 
-    RequestContext, 
+    ModelScheduler,
+    SchedulerConfig,
+    RequestContext,
     ChatMessage,
     ProviderConfig,
 )
@@ -23,16 +23,40 @@ from agent_orchestration import (
     ExecutionContext,
     ToolFactory
 )
+from agent_orchestration.tools import BaseTool, ToolSchema, ToolParameter
+from agent_orchestration.react import ReActExecutor, ReActConfig
 
 # 配置信息
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 
+# 验证API密钥
+def validate_api_keys():
+    """验证API密钥是否存在且有效"""
+    missing_keys = []
+    
+    if not ANTHROPIC_API_KEY:
+        missing_keys.append("ANTHROPIC_API_KEY")
+    elif not ANTHROPIC_API_KEY.startswith('sk-ant-'):
+        print("警告: ANTHROPIC_API_KEY格式可能不正确，应以'sk-ant-'开头")
+    
+    if not OPENROUTER_API_KEY:
+        missing_keys.append("OPENROUTER_API_KEY")
+    elif len(OPENROUTER_API_KEY) < 20:
+        print("警告: OPENROUTER_API_KEY长度可能不正确")
+    
+    if missing_keys:
+        print(f"错误: 缺少以下API密钥: {', '.join(missing_keys)}")
+        print("请设置相应的环境变量后再运行示例")
+        return False
+    
+    return True
+
 # 提供商配置
 provider_configs = {
     "anthropic": ProviderConfig(api_key=ANTHROPIC_API_KEY),
     "openrouter": ProviderConfig(api_key=OPENROUTER_API_KEY),
-    "ollama": ProviderConfig(base_url="http://localhost:11434"),
+    "ollama": ProviderConfig(base_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")),
 }
 
 async def example_1_basic_agent():
@@ -133,8 +157,9 @@ async def example_2_agent_communication():
             message_type="request"
         )
         
-        # 等待一段时间让消息处理
-        await asyncio.sleep(5)
+        # 等待一段时间让消息处理（使用常量）
+        MESSAGE_PROCESSING_WAIT_TIME = 5
+        await asyncio.sleep(MESSAGE_PROCESSING_WAIT_TIME)
         
         # 查看通信统计
         stats = communicator.get_stats()
@@ -228,8 +253,6 @@ async def example_4_custom_tool():
     """示例4: 自定义工具"""
     print("\n=== 示例4: 自定义工具 ===")
     
-    from agent_orchestration.tools import BaseTool, ToolSchema, ToolParameter
-    
     # 创建自定义工具
     class EmailTool(BaseTool):
         def __init__(self):
@@ -240,8 +263,9 @@ async def example_4_custom_tool():
         
         async def execute(self, to: str, subject: str, body: str) -> str:
             """模拟发送邮件"""
-            # 模拟发送延迟
-            await asyncio.sleep(0.5)
+            # 模拟发送延迟（使用常量）
+            EMAIL_SEND_DELAY = 0.5
+            await asyncio.sleep(EMAIL_SEND_DELAY)
             
             # 模拟发送结果
             print(f"模拟发送邮件:")
@@ -325,8 +349,6 @@ async def example_5_react_debugging():
     """示例5: ReAct调试"""
     print("\n=== 示例5: ReAct调试 ===")
     
-    from agent_orchestration.react import ReActExecutor, ReActConfig
-    
     # 创建模型调度器
     scheduler_config = SchedulerConfig(
         default_provider='anthropic',
@@ -390,10 +412,10 @@ async def main():
     print("智能体编排框架示例")
     print("=" * 50)
     
-    # 检查API密钥
-    if not ANTHROPIC_API_KEY and not OPENROUTER_API_KEY:
-        print("警告: 未设置ANTHROPIC_API_KEY或OPENROUTER_API_KEY环境变量")
-        print("某些示例可能无法正常运行")
+    # 验证API密钥
+    if not validate_api_keys():
+        print("由于API密钥验证失败，程序退出")
+        return
     
     try:
         # 运行示例

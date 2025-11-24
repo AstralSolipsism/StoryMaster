@@ -6,7 +6,7 @@ import asyncio
 import time
 import uuid
 from typing import Dict, List, Optional, Any, Type
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
 
 from .interfaces import (
@@ -37,11 +37,21 @@ class ReasoningEngineFactory(IReasoningEngineFactory):
         if engine_name not in self._engines:
             raise ValueError(f"不支持的推理模式: {engine_name}")
         
-        engine_class = self._engines[engine_name]
+        engine_class_or_path = self._engines[engine_name]
+        
+        # 处理字符串路径导入
+        if isinstance(engine_class_or_path, str):
+            # 动态导入类
+            module_path, class_name = engine_class_or_path.rsplit('.', 1)
+            module = __import__(module_path, fromlist=[class_name])
+            engine_class = getattr(module, class_name)
+        else:
+            engine_class = engine_class_or_path
+        
         engine = engine_class()
         
-        # 不在创建时初始化，延迟到使用时初始化
-        engine._config = config
+        # 使用公共方法设置配置，遵循封装原则
+        engine.set_config(config)
         
         self.logger.info(f"创建推理引擎: {engine_name}")
         return engine
@@ -52,12 +62,13 @@ class ReasoningEngineFactory(IReasoningEngineFactory):
     
     def _register_default_engines(self) -> None:
         """注册默认推理引擎"""
-        self.register_engine("chain_of_thought", ChainOfThoughtEngine)
-        self.register_engine("tree_of_thought", TreeOfThoughtEngine)
-        self.register_engine("graph_of_thought", GraphOfThoughtEngine)
-        self.register_engine("algorithm_of_thoughts", AlgorithmOfThoughtsEngine)
-        self.register_engine("skeleton_of_thought", SkeletonOfThoughtEngine)
-        self.register_engine("react", ReactReasoningEngine)
+        # 使用字符串延迟导入，避免前向引用问题
+        self.register_engine("chain_of_thought", "agent_orchestration.reasoning.ChainOfThoughtEngine")
+        self.register_engine("tree_of_thought", "agent_orchestration.reasoning.TreeOfThoughtEngine")
+        self.register_engine("graph_of_thought", "agent_orchestration.reasoning.GraphOfThoughtEngine")
+        self.register_engine("algorithm_of_thoughts", "agent_orchestration.reasoning.AlgorithmOfThoughtsEngine")
+        self.register_engine("skeleton_of_thought", "agent_orchestration.reasoning.SkeletonOfThoughtEngine")
+        self.register_engine("react", "agent_orchestration.reasoning.ReactReasoningEngine")
 
 class BaseReasoningEngine(IReasoningEngine):
     """基础推理引擎"""
@@ -67,6 +78,10 @@ class BaseReasoningEngine(IReasoningEngine):
         self.model_scheduler: Optional[ModelScheduler] = None
         self.logger = logging.getLogger(self.__class__.__name__)
         self._initialized = False
+    
+    def set_config(self, config: Dict[str, Any]) -> None:
+        """设置引擎配置"""
+        self.config = config
     
     async def initialize(self, config: Dict[str, Any] = None) -> None:
         """初始化推理引擎"""
@@ -130,6 +145,9 @@ class ChainOfThoughtEngine(BaseReasoningEngine):
                 if self._is_final_thought(current_thought):
                     break
                 
+                # 记录每步的开始时间
+                step_start_time = time.time()
+                
                 # 生成下一步思考
                 next_thought = await self._generate_next_thought(
                     agent, current_thought, tools, context
@@ -138,8 +156,9 @@ class ChainOfThoughtEngine(BaseReasoningEngine):
                 thoughts.append(next_thought)
                 current_thought = next_thought
                 
-                # 超时检查
-                if time.time() - start_time > step_timeout:
+                # 检查每步的执行时间是否超过step_timeout
+                if time.time() - step_start_time > step_timeout:
+                    self.logger.warning(f"步骤 {step+1} 超时，停止推理")
                     break
             
             # 构建最终答案
@@ -188,7 +207,8 @@ class ChainOfThoughtEngine(BaseReasoningEngine):
     
     def _is_final_thought(self, thought: str) -> bool:
         """判断是否为最终思考"""
-        final_keywords = ["最终答案", "结论", "完成", "解决"]
+        # 从配置中获取最终判断关键词，如果没有配置则使用默认值
+        final_keywords = self.config.get("final_keywords", ["最终答案", "结论", "完成", "解决"])
         return any(keyword in thought for keyword in final_keywords)
     
     async def _generate_final_answer(self, thoughts: List[str], context: ExecutionContext) -> str:
@@ -291,7 +311,8 @@ class TreeOfThoughtEngine(BaseReasoningEngine):
         """评估和剪枝"""
         # 按置信度排序并保留前N个
         thoughts.sort(key=lambda x: x.confidence, reverse=True)
-        max_keep = self.config.get("prune_threshold", 0.3)
+        # 重命名为confidence_threshold，更准确地反映其用途
+        max_keep = self.config.get("confidence_threshold", 0.3)
         return [t for t in thoughts if t.confidence >= max_keep]
     
     def _should_stop(self, thoughts: List[ThoughtNode]) -> bool:
@@ -315,13 +336,21 @@ class ThoughtTree:
     
     def add_root(self, root: ThoughtNode) -> None:
         """添加根节点"""
+        # 为节点生成唯一ID
+        root.id = str(uuid.uuid4())
         self.root = root
+        self.nodes[root.id] = root
+        # 同时使用内容作为键，方便测试查找
         self.nodes[root.content] = root
     
     def add_child(self, parent: ThoughtNode, child: ThoughtNode) -> None:
         """添加子节点"""
+        # 为节点生成唯一ID
+        child.id = str(uuid.uuid4())
         child.parent = parent
         parent.children.append(child)
+        self.nodes[child.id] = child
+        # 同时使用内容作为键，方便测试查找
         self.nodes[child.content] = child
     
     def find_best_path(self) -> List[ThoughtNode]:
@@ -331,10 +360,10 @@ class ThoughtTree:
         
         def dfs(node: ThoughtNode, path: List[ThoughtNode]) -> List[ThoughtNode]:
             path.append(node)
-            
+           
             if not node.children:
                 return path.copy()
-            
+           
             best_child = max(node.children, key=lambda x: x.confidence)
             return dfs(best_child, path)
         
@@ -461,14 +490,17 @@ class ReactReasoningEngine(BaseReasoningEngine):
         # 暂时返回基本实现
         return await super().process(agent, context, tools)
 
-# 全局推理引擎工厂实例
-reasoning_engine_factory = ReasoningEngineFactory()
+# 全局推理引擎工厂实例（使用单例模式避免状态污染）
+_reasoning_engine_factory = None
 
-# 便捷函数
 def get_reasoning_engine_factory() -> ReasoningEngineFactory:
-    """获取推理引擎工厂实例"""
-    return reasoning_engine_factory
+    """获取推理引擎工厂实例（单例模式）"""
+    global _reasoning_engine_factory
+    if _reasoning_engine_factory is None:
+        _reasoning_engine_factory = ReasoningEngineFactory()
+    return _reasoning_engine_factory
 
 async def create_reasoning_engine(mode: ReasoningMode, config: Dict[str, Any]) -> IReasoningEngine:
     """创建推理引擎"""
-    return reasoning_engine_factory.create_engine(mode, config)
+    factory = get_reasoning_engine_factory()
+    return factory.create_engine(mode, config)

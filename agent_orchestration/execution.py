@@ -66,9 +66,12 @@ class ResourceManager(IResourceManager):
         """释放资源"""
         allocation_id = None
         
-        # 查找分配ID
+        # 查找分配ID - 使用ID比较而不是对象引用比较
         for aid, alloc in self.allocated_resources.items():
-            if alloc is allocation:
+            # 比较资源分配的关键属性而不是对象引用
+            if (alloc.cpu_cores == allocation.cpu_cores and
+                alloc.memory_mb == allocation.memory_mb and
+                alloc.gpu_memory == allocation.gpu_memory):
                 allocation_id = aid
                 break
         

@@ -20,11 +20,33 @@ from model_adapter import (
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 
+# Validate API keys
+def validate_api_keys():
+    """验证API密钥是否存在且有效"""
+    missing_keys = []
+    
+    if not ANTHROPIC_API_KEY:
+        missing_keys.append("ANTHROPIC_API_KEY")
+    elif not ANTHROPIC_API_KEY.startswith('sk-ant-'):
+        print("警告: ANTHROPIC_API_KEY格式可能不正确，应以'sk-ant-'开头")
+    
+    if not OPENROUTER_API_KEY:
+        missing_keys.append("OPENROUTER_API_KEY")
+    elif len(OPENROUTER_API_KEY) < 20:
+        print("警告: OPENROUTER_API_KEY长度可能不正确")
+    
+    if missing_keys:
+        print(f"错误: 缺少以下API密钥: {', '.join(missing_keys)}")
+        print("请设置相应的环境变量后再运行示例")
+        return False
+    
+    return True
+
 # Provider-specific configurations
 provider_configs = {
     "anthropic": ProviderConfig(api_key=ANTHROPIC_API_KEY),
     "openrouter": ProviderConfig(api_key=OPENROUTER_API_KEY),
-    "ollama": ProviderConfig(base_url="http://localhost:11434"), # Default, but can be overridden
+    "ollama": ProviderConfig(base_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")), # Default, but can be overridden
 }
 
 
@@ -32,6 +54,11 @@ async def main():
     """
     Demonstrates basic usage, streaming, error handling, and advanced features.
     """
+    # 验证API密钥
+    if not validate_api_keys():
+        print("由于API密钥验证失败，程序退出")
+        return
+    
     print("--- Initializing Model Scheduler ---")
     # Configure the scheduler
     scheduler_config = SchedulerConfig(
@@ -182,15 +209,18 @@ async def advanced_example(scheduler: ModelScheduler):
 
 class BatchRequestProcessor:
     """Simple batch request processor."""
-    def __init__(self, scheduler: ModelScheduler, concurrency: int = 3):
+    # 默认并发限制常量
+    DEFAULT_CONCURRENCY = 2
+    
+    def __init__(self, scheduler: ModelScheduler, concurrency: int = None):
         self.scheduler = scheduler
-        self.concurrency = concurrency
+        self.concurrency = concurrency if concurrency is not None else self.DEFAULT_CONCURRENCY
     
     async def process_batch(self, requests: List[RequestContext]) -> List[any]:
         """Processes a batch of requests concurrently."""
         semaphore = asyncio.Semaphore(self.concurrency)
         
-        async def process_one(req):
+        async def process_one(req: RequestContext) -> any:
             async with semaphore:
                 return await self.scheduler.chat(req)
 
@@ -200,7 +230,7 @@ class BatchRequestProcessor:
 
 async def batch_example(scheduler: ModelScheduler):
     """Demonstrates processing multiple requests in a batch."""
-    batch_processor = BatchRequestProcessor(scheduler, concurrency=2)
+    batch_processor = BatchRequestProcessor(scheduler)
     
     batch_requests = [
         RequestContext(

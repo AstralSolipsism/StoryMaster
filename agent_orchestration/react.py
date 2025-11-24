@@ -67,6 +67,10 @@ class ReActConfig:
     initial_thought: str = "让我分析一下这个任务，看看需要使用什么工具来解决问题。"
     stop_phrases: List[str] = None
     
+    # 定义常量避免魔法数字
+    DEFAULT_MAX_TOKENS: int = 2000
+    DEFAULT_TEMPERATURE: float = 0.1
+    
     def __post_init__(self):
         if self.stop_phrases is None:
             self.stop_phrases = [
@@ -78,40 +82,50 @@ class ReActConfig:
 class ReActParser:
     """ReAct响应解析器"""
     
-    @staticmethod
-    def parse_response(response: str) -> Tuple[Optional[str], Optional[str], Optional[Dict[str, Any]], Optional[str]]:
+    # 预编译正则表达式提高性能
+    THOUGHT_PATTERN = re.compile(r'Thought:\s*(.*?)(?=\n\s*(?:Action|Final Answer)|$)', re.DOTALL)
+    ACTION_PATTERN = re.compile(r'Action:\s*(.*?)(?=\n|$)', re.DOTALL)
+    ACTION_INPUT_PATTERN = re.compile(r'Action Input:\s*(.*?)(?=\n(?:Thought|Action|Final Answer|Observation)|$)', re.DOTALL)
+    FINAL_ANSWER_PATTERN = re.compile(r'Final Answer:\s*(.*?)(?=\n|$)', re.DOTALL)
+    
+    @classmethod
+    def parse_response(cls, response: str) -> Tuple[Optional[str], Optional[str], Optional[Dict[str, Any]], Optional[str]]:
         """
         解析模型响应，提取思考、行动、行动输入和最终答案
         
         Returns:
             (thought, action, action_input, final_answer)
         """
-        # 提取思考
-        thought_match = re.search(r'Thought:\s*(.*?)(?=\n\s*(?:Action|Final Answer)|$)', response, re.DOTALL)
+        # 使用预编译的正则表达式提高性能
+        thought_match = cls.THOUGHT_PATTERN.search(response)
         thought = thought_match.group(1).strip() if thought_match else None
         
         # 提取行动
-        action_match = re.search(r'Action:\s*(.*?)(?=\n|$)', response)
+        action_match = cls.ACTION_PATTERN.search(response)
         action = action_match.group(1).strip() if action_match else None
         
         # 提取行动输入
-        action_input_match = re.search(r'Action Input:\s*(.*?)(?=\n(?:Thought|Action|Final Answer|Observation)|$)', response, re.DOTALL)
+        action_input_match = cls.ACTION_INPUT_PATTERN.search(response)
         action_input = None
         if action_input_match:
             try:
                 action_input = json.loads(action_input_match.group(1).strip())
             except json.JSONDecodeError:
-                # 尝试修复常见的JSON格式问题
+                # 尝试修复常见的JSON格式问题，但使用更安全的方法
                 input_str = action_input_match.group(1).strip()
-                # 替换单引号为双引号
-                input_str = input_str.replace("'", '"')
                 try:
-                    action_input = json.loads(input_str)
-                except json.JSONDecodeError:
+                    # 使用ast.literal_eval作为更安全的替代方案
+                    import ast
+                    action_input = ast.literal_eval(input_str)
+                    # 确保结果是字典类型
+                    if not isinstance(action_input, dict):
+                        action_input = {"raw_input": input_str}
+                except (ValueError, SyntaxError):
+                    # 如果ast.literal_eval也失败，则返回原始输入
                     action_input = {"raw_input": input_str}
         
         # 提取最终答案
-        final_answer_match = re.search(r'Final Answer:\s*(.*?)(?=\n|$)', response, re.DOTALL)
+        final_answer_match = cls.FINAL_ANSWER_PATTERN.search(response)
         final_answer = final_answer_match.group(1).strip() if final_answer_match else None
         
         return thought, action, action_input, final_answer
@@ -158,8 +172,8 @@ class ReActExecutor:
                 # 调用模型
                 request_context = RequestContext(
                     messages=[ChatMessage(role='user', content=prompt)],
-                    max_tokens=2000,
-                    temperature=0.1
+                    max_tokens=self.config.DEFAULT_MAX_TOKENS,
+                    temperature=self.config.DEFAULT_TEMPERATURE
                 )
                 
                 response = await self.model_scheduler.chat(request_context)
@@ -222,11 +236,13 @@ class ReActExecutor:
                         tool_result=tool_result
                     ))
                     
-                    # 更新提示，添加观察结果
-                    prompt += f"\nObservation: {observation}\nThought: "
+                    # 更新提示，添加观察结果（使用列表收集提高性能）
+                    prompt_parts = [prompt, f"\nObservation: {observation}\nThought: "]
+                    prompt = "".join(prompt_parts)
                 else:
                     # 如果没有行动，继续思考
-                    prompt += f"\nThought: "
+                    prompt_parts = [prompt, f"\nThought: "]
+                    prompt = "".join(prompt_parts)
             
             # 达到最大迭代次数
             return ReActResult(
@@ -240,9 +256,9 @@ class ReActExecutor:
         except Exception as e:
             return ReActResult(
                 success=False,
-                error_message=f"执行过程中发生错误: {str(e)}",
+                error_message=f"ReAct执行失败: {str(e)}",
                 steps=steps,
-                total_iterations=len(steps) // 3,  # 估算迭代次数
+                total_iterations=iteration + 1,  # 使用实际的迭代次数
                 total_time=time.time() - start_time
             )
     
@@ -291,7 +307,7 @@ class ReActExecutor:
         tool = self.tools[tool_name]
         
         # 验证参数
-        is_valid, error_message = tool.validate_parameters(parameters)
+        is_valid, error_message = tool.validate_parameters(parameters) if hasattr(tool, 'validate_parameters') else (True, None)
         if not is_valid:
             return ToolResult(
                 tool_name=tool_name,

@@ -4,7 +4,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any, AsyncIterable, Union, Type, TYPE_CHECKING
+from typing import Dict, List, Optional, Any, AsyncIterable, Union, Type, TYPE_CHECKING, Tuple
 from enum import Enum
 from datetime import datetime
 
@@ -343,8 +343,15 @@ class ITool(ABC):
         """获取工具模式"""
         pass
     
-    def validate_parameters(self, parameters: Dict[str, Any]) -> tuple[bool, Optional[str]]:
+    def validate_parameters(self, parameters: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
         """验证参数"""
+        # 添加对None值和空值的验证逻辑
+        if parameters is None:
+            return False, "参数不能为None"
+        
+        if not isinstance(parameters, dict):
+            return False, "参数必须是字典类型"
+        
         schema = self.get_schema()
         for param in schema.parameters:
             if param.required and param.name not in parameters:

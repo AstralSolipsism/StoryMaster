@@ -32,6 +32,10 @@ class ConfigurationManager(IConfigurationManager):
         if config_id in self.configs:
             return self.configs[config_id]
         
+        # 验证config_id，防止路径遍历攻击
+        if not self._is_valid_config_id(config_id):
+            raise ValueError(f"无效的配置ID: {config_id}")
+        
         # 从文件加载
         config_file = Path(self.storage_path) / f"{config_id}.json"
         if config_file.exists():
@@ -58,6 +62,10 @@ class ConfigurationManager(IConfigurationManager):
         validation_result = await self.validate_config(config)
         if not validation_result.is_valid:
             raise ValueError(f"配置验证失败: {validation_result.errors}")
+        
+        # 验证config_id，防止路径遍历攻击
+        if not self._is_valid_config_id(config_id):
+            raise ValueError(f"无效的配置ID: {config_id}")
         
         # 保存到内存
         self.configs[config_id] = config
@@ -219,6 +227,13 @@ class ConfigurationManager(IConfigurationManager):
                 return False
         
         return True
+    
+    def _is_valid_config_id(self, config_id: str) -> bool:
+        """验证配置ID是否安全，防止路径遍历攻击"""
+        import re
+        # 只允许字母、数字、下划线和连字符
+        pattern = r'^[a-zA-Z0-9_-]+$'
+        return bool(re.match(pattern, config_id)) and len(config_id) <= 50
 
 class DynamicConfigLoader:
     """动态配置加载器"""

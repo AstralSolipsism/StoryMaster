@@ -1,5 +1,7 @@
 import aiohttp
 import json
+import os
+import logging
 from typing import AsyncIterable, Dict, Any, List, Optional
 
 from ..base import BaseModelAdapter, ApiError
@@ -21,6 +23,10 @@ class OpenRouterAdapter(BaseModelAdapter):
     DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
     DEFAULT_MAX_TOKENS = 4096
     
+    def __init__(self, config: ProviderConfig):
+        super().__init__(config)
+        self.logger = logging.getLogger(__name__)
+    
     @property
     def provider_name(self) -> str:
         return "openrouter"
@@ -31,10 +37,12 @@ class OpenRouterAdapter(BaseModelAdapter):
     def _get_default_headers(self) -> Dict[str, str]:
         headers = {
             'Content-Type': 'application/json',
-            # Replace with your app's URL
-            'HTTP-Referer': self.config.get('http_referer', 'https://roo-code.com'),
-            # Replace with your app's name
-            'X-Title': self.config.get('x_title', 'Roo Code'),
+            # 使用环境变量或配置文件中的值，避免硬编码
+            'HTTP-Referer': self.config.get('http_referer',
+                os.environ.get('HTTP_REFERER', 'https://example.com')),
+            # 使用环境变量或配置文件中的值，避免硬编码
+            'X-Title': self.config.get('x_title',
+                os.environ.get('APP_NAME', 'StoryMaster')),
         }
         
         api_key = self.config.get('api_key') # Standardized to 'api_key'
@@ -48,7 +56,7 @@ class OpenRouterAdapter(BaseModelAdapter):
         try:
             response = await self._request('/models', method='GET')
         except ApiError as e:
-            print(f"Failed to fetch OpenRouter models: {e.message}")
+            self.logger.error(f"Failed to fetch OpenRouter models: {e.message}")
             return []
 
         models = []
@@ -99,11 +107,17 @@ class OpenRouterAdapter(BaseModelAdapter):
             if not response.ok:
                 raise ApiError(response.status, await response.text())
             
+            json_decode_errors = 0
+            unicode_decode_errors = 0
+            
             async for line in response.content:
                 try:
                     line = line.decode('utf-8').strip()
-                except UnicodeDecodeError:
+                except UnicodeDecodeError as e:
+                    unicode_decode_errors += 1
+                    self.logger.warning(f"Unicode decode error in stream: {e}")
                     continue
+                    
                 if line.startswith('data: '):
                     data = line[6:]
                     if data == '[DONE]':
@@ -112,8 +126,16 @@ class OpenRouterAdapter(BaseModelAdapter):
                     try:
                         parsed = json.loads(data)
                         yield self._transform_chunk(parsed)
-                    except json.JSONDecodeError:
+                    except json.JSONDecodeError as e:
+                        json_decode_errors += 1
+                        self.logger.warning(f"JSON decode error in stream: {e}, data: {data[:100]}...")
                         continue
+            
+            # 记录错误统计
+            if json_decode_errors > 0:
+                self.logger.error(f"Total JSON decode errors: {json_decode_errors}")
+            if unicode_decode_errors > 0:
+                self.logger.error(f"Total Unicode decode errors: {unicode_decode_errors}")
     
     def _build_chat_request(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """构建聊天请求"""
