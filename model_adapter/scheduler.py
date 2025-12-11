@@ -331,26 +331,47 @@ class ModelScheduler:
     ) -> AsyncIterable[ChatChunk]:
         """处理流式请求失败"""
         logging.warning("Stream failed with %s (%s): %s", schedule.provider, schedule.model, error)
+        
         try:
             fallback_response = await self._handle_failure(error, context, schedule)
             
-            # Convert the full response to a stream of chunks
-            content = fallback_response.choices[0].message.content if fallback_response.choices else ''
+            if not fallback_response.choices:
+                raise ValueError("No choices in fallback response")
+            
+            # 获取内容，确保不为None
+            content = fallback_response.choices[0].message.content if fallback_response.choices[0].message else ''
+            content = content or ''  # 确保不是None
+            
+            # 第一个chunk：发送内容
             yield ChatChunk(
                 id=fallback_response.id,
                 object='chat.completion.chunk',
                 created=fallback_response.created,
                 model=fallback_response.model,
-                choices=[{'index': 0, 'delta': {'content': content}, 'finish_reason': None}]
+                choices=[{
+                    'index': 0,
+                    'delta': {'content': content} if content else {},  # 空内容时使用空字典
+                    'finish_reason': None
+                }]
             )
+            
+            # 第二个chunk：发送结束标记
             yield ChatChunk(
                 id=fallback_response.id,
                 object='chat.completion.chunk',
                 created=fallback_response.created,
                 model=fallback_response.model,
-                choices=[{'index': 0, 'delta': {}, 'finish_reason': fallback_response.choices[0].finish_reason}]
+                choices=[{
+                    'index': 0,
+                    'delta': {},  # 结束chunk使用空字典
+                    'finish_reason': fallback_response.choices[0].finish_reason or 'stop'
+                }]
             )
+        
         except Exception as fallback_error:
+            # 统一错误消息格式，确保包含"ERROR"（不带额外字符）
+            error_message = "ERROR: An unexpected error occurred. Please try again."
+            
             yield ChatChunk(
                 id=f"error-{int(time.time())}",
                 object='chat.completion.chunk',
@@ -358,10 +379,11 @@ class ModelScheduler:
                 model=schedule.model,
                 choices=[{
                     'index': 0,
-                    'delta': {'content': "\n\n--- ERROR ---\nAn unexpected error occurred. Please try again."},
+                    'delta': {'content': error_message},
                     'finish_reason': 'error'
                 }]
             )
+
     
     def _get_provider_config(self, provider_name: str) -> ProviderConfig:
         """获取提供商配置"""

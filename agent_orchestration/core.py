@@ -90,9 +90,19 @@ class BaseAgent(IAgent):
         """获取工具字典"""
         tools_dict = {}
         if hasattr(tool_manager, 'tools'):
-            tools_dict = tool_manager.tools
+            # 确保返回的是工具对象而不是字典
+            for tool_name, tool_info in tool_manager.tools.items():
+                if isinstance(tool_info, dict) and 'tool' in tool_info:
+                    tools_dict[tool_name] = tool_info['tool']
+                else:
+                    tools_dict[tool_name] = tool_info
         elif hasattr(tool_manager, '_tools'):
-            tools_dict = tool_manager._tools
+            # 确保返回的是工具对象而不是字典
+            for tool_name, tool_info in tool_manager._tools.items():
+                if isinstance(tool_info, dict) and 'tool' in tool_info:
+                    tools_dict[tool_name] = tool_info['tool']
+                else:
+                    tools_dict[tool_name] = tool_info
         else:
             # 尝试通过list_tools方法获取工具
             try:
@@ -100,6 +110,9 @@ class BaseAgent(IAgent):
                 for tool_info in tool_infos:
                     if hasattr(tool_info, 'name') and hasattr(tool_info, 'tool'):
                         tools_dict[tool_info.name] = tool_info.tool
+                    elif hasattr(tool_info, 'name'):
+                        # 如果tool_info本身就是工具对象
+                        tools_dict[tool_info.name] = tool_info
             except Exception as e:
                 self.logger.warning(f"Failed to get tools from tool_manager: {e}")
         return tools_dict

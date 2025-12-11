@@ -245,11 +245,13 @@ class FileSystemAdapter(IFileStorage):
             full_path = self._get_full_path(directory)
             total_size = 0
             
-            async for root, dirs, files in aiofiles.os.walk(full_path):
+            # 使用同步的os.walk替代aiofiles.os.walk
+            import os
+            for root, dirs, files in os.walk(full_path):
                 for file in files:
                     file_path = Path(root) / file
-                    if await aiofiles.os.path.isfile(file_path):
-                        stat = await aiofiles.os.stat(file_path)
+                    if os.path.isfile(file_path):
+                        stat = os.stat(file_path)
                         total_size += stat.st_size
             
             return total_size

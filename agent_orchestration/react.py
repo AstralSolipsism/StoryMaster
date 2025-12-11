@@ -74,6 +74,8 @@ class ReActConfig:
     enable_examples: bool = True
     initial_thought: str = "让我分析一下这个任务，看看需要使用什么工具来解决问题。"
     stop_phrases: List[str] = None
+    DEFAULT_MAX_TOKENS: int = DEFAULT_MAX_TOKENS  # 添加常量属性
+    DEFAULT_TEMPERATURE: float = DEFAULT_TEMPERATURE  # 添加温度常量
     
     def __post_init__(self):
         if self.stop_phrases is None:
@@ -87,10 +89,10 @@ class ReActParser:
     """ReAct响应解析器"""
     
     # 预编译正则表达式提高性能
-    THOUGHT_PATTERN = re.compile(r'Thought:\s*(.*?)(?=\n\s*(?:Action|Final Answer)|$)', re.DOTALL)
-    ACTION_PATTERN = re.compile(r'Action:\s*(.*?)(?=\n|$)', re.DOTALL)
-    ACTION_INPUT_PATTERN = re.compile(r'Action Input:\s*(.*?)(?=\n(?:Thought|Action|Final Answer|Observation)|$)', re.DOTALL)
-    FINAL_ANSWER_PATTERN = re.compile(r'Final Answer:\s*(.*?)(?=\n|$)', re.DOTALL)
+    THOUGHT_PATTERN = re.compile(r'Thought:\s*(.*?)(?=\n\s*(?:Action|Final Answer)|$)', re.DOTALL | re.IGNORECASE)
+    ACTION_PATTERN = re.compile(r'Action:\s*(.*?)(?=\n|$)', re.DOTALL | re.IGNORECASE)
+    ACTION_INPUT_PATTERN = re.compile(r'Action Input:\s*(.*?)(?=\n\s*(?:Thought|Action|Final Answer|Observation)|$)', re.DOTALL | re.IGNORECASE)
+    FINAL_ANSWER_PATTERN = re.compile(r'Final Answer:\s*(.*?)(?=\n|$)', re.DOTALL | re.IGNORECASE)
     
     @classmethod
     def parse_response(cls, response: str) -> Tuple[Optional[str], Optional[str], Optional[Dict[str, Any]], Optional[str]]:
@@ -177,7 +179,7 @@ class ReActExecutor:
                 request_context = RequestContext(
                     messages=[ChatMessage(role='user', content=prompt)],
                     max_tokens=self.config.DEFAULT_MAX_TOKENS,
-                    temperature=self.config.DEFAULT_TEMPERATURE
+                    temperature=getattr(self.config, 'DEFAULT_TEMPERATURE', DEFAULT_TEMPERATURE)
                 )
                 
                 response = await self.model_scheduler.chat(request_context)
@@ -245,11 +247,14 @@ class ReActExecutor:
                 else:
                     # 如果没有行动，继续思考
                     prompt += f"\nThought: "
+                    # 如果没有最终答案，添加提示
+                    if not final_answer:
+                        prompt += "请继续思考，如果需要使用工具，请使用Action格式。如果已经有最终答案，请使用Final Answer格式。"
             
             # 达到最大迭代次数
             return ReActResult(
                 success=False,
-                error_message="达到最大迭代次数，未能完成任务",
+                error_message="达到最大迭代次数未找到最终答案",
                 steps=steps,
                 total_iterations=self.config.max_iterations,
                 total_time=time.time() - start_time

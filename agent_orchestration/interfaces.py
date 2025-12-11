@@ -148,6 +148,11 @@ class AgentConfig:
     max_memory_usage: int
     concurrency_limit: int
     
+    # 模型配置
+    max_tokens: int = 2000
+    temperature: float = 0.7
+    system_prompt: Optional[str] = None
+    
     # 个性化配置
     personality: Optional[Dict[str, float]] = None
     behavior_patterns: Optional[Dict[str, str]] = None
