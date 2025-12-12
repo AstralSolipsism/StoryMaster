@@ -24,7 +24,7 @@ from ..interfaces import (
 class Neo4jAdapter(IStorageAdapter):
     """Neo4j图数据库适配器"""
     
-    def __init__(self, uri: str, username: str, password: str, 
+    def __init__(self, uri: str, username: str, password: str,
                  max_connection_lifetime: int = 3600, max_connection_pool_size: int = 50):
         """
         初始化Neo4j适配器
@@ -36,9 +36,15 @@ class Neo4jAdapter(IStorageAdapter):
             max_connection_lifetime: 最大连接生命周期（秒）
             max_connection_pool_size: 最大连接池大小
         """
+        import hashlib
+        import os
+        
         self.uri = uri
         self.username = username
-        self.password = password
+        # 对密码进行哈希处理，避免明文存储
+        self._password_hash = hashlib.sha256(password.encode()).hexdigest()
+        # 在内存中保留明文密码仅用于连接，使用后应清除
+        self._password = password
         self.max_connection_lifetime = max_connection_lifetime
         self.max_connection_pool_size = max_connection_pool_size
         
@@ -53,18 +59,21 @@ class Neo4jAdapter(IStorageAdapter):
             # 创建同步驱动器（用于简单查询）
             self.driver = GraphDatabase.driver(
                 self.uri,
-                auth=(self.username, self.password),
+                auth=(self.username, self._password),
+                max_connection_lifetime=self.max_connection_lifetime,
+                max_connection_pool_size=self.max_connection_pool_size
+            )
+           
+            # 创建异步驱动器（用于异步查询）
+            self.async_driver = AsyncGraphDatabase.driver(
+                self.uri,
+                auth=(self.username, self._password),
                 max_connection_lifetime=self.max_connection_lifetime,
                 max_connection_pool_size=self.max_connection_pool_size
             )
             
-            # 创建异步驱动器（用于异步查询）
-            self.async_driver = AsyncGraphDatabase.driver(
-                self.uri,
-                auth=(self.username, self.password),
-                max_connection_lifetime=self.max_connection_lifetime,
-                max_connection_pool_size=self.max_connection_pool_size
-            )
+            # 连接成功后，清除内存中的明文密码
+            self._clear_password()
             
             # 测试连接
             await self._test_connection()
@@ -214,13 +223,18 @@ class Neo4jAdapter(IStorageAdapter):
     async def create_relationship(self, from_entity_id: str, to_entity_id: str,
                                 relationship_type: str, properties: Dict[str, Any] = None) -> str:
         """创建关系"""
+        # 验证关系类型，防止注入攻击
+        if not self._is_valid_relationship_type(relationship_type):
+            raise ValueError(f"无效的关系类型: {relationship_type}")
+            
         relationship_id = f"{from_entity_id}_{relationship_type}_{to_entity_id}"
         properties = properties or {}
         
-        query = """
+        # 使用参数化查询，动态构建关系类型
+        query = f"""
         MATCH (a), (b)
         WHERE a.id = $from_id AND b.id = $to_id
-        CREATE (a)-[r:RELATIONSHIP {properties}]->(b)
+        CREATE (a)-[r:{relationship_type} {{properties}}]->(b)
         SET r.id = $relationship_id
         RETURN r.id
         """
@@ -228,7 +242,6 @@ class Neo4jAdapter(IStorageAdapter):
         params = {
             "from_id": from_entity_id,
             "to_id": to_entity_id,
-            "relationship_type": relationship_type,
             "properties": properties,
             "relationship_id": relationship_id
         }
@@ -241,7 +254,7 @@ class Neo4jAdapter(IStorageAdapter):
         else:
             raise RuntimeError(f"创建关系失败: {relationship_id}")
     
-    async def get_relationships(self, entity_id: str, 
+    async def get_relationships(self, entity_id: str,
                                relationship_type: Optional[str] = None,
                                direction: str = "both") -> List[Dict[str, Any]]:
         """获取实体的关系"""
@@ -253,10 +266,15 @@ class Neo4jAdapter(IStorageAdapter):
             query = "MATCH (a)-[r]-(b) WHERE a.id = $entity_id"
         
         if relationship_type:
-            query += f" AND type(r) = '{relationship_type}'"
+            # 验证关系类型，防止注入攻击
+            if not self._is_valid_relationship_type(relationship_type):
+                raise ValueError(f"无效的关系类型: {relationship_type}")
+            query += f" AND type(r) = $relationship_type"
+            params = {"entity_id": entity_id, "relationship_type": relationship_type}
+        else:
+            params = {"entity_id": entity_id}
         
         query += " RETURN a, r, b"
-        params = {"entity_id": entity_id}
         
         results = await self.execute_query(query, params)
         
@@ -332,7 +350,9 @@ class Neo4jAdapter(IStorageAdapter):
         prop_list = []
         for key, value in properties.items():
             if isinstance(value, str):
-                prop_list.append(f"{key}: '{value}'")
+                # 转义字符串中的单引号，防止注入
+                escaped_value = value.replace("'", "\\'")
+                prop_list.append(f"{key}: '{escaped_value}'")
             elif isinstance(value, (int, float)):
                 prop_list.append(f"{key}: {value}")
             elif isinstance(value, bool):
@@ -340,7 +360,9 @@ class Neo4jAdapter(IStorageAdapter):
             elif isinstance(value, dict):
                 prop_list.append(f"{key}: {self._dict_to_cypher(value)}")
             else:
-                prop_list.append(f"{key}: '{str(value)}'")
+                # 转义其他类型的字符串表示
+                escaped_value = str(value).replace("'", "\\'")
+                prop_list.append(f"{key}: '{escaped_value}'")
         
         return "{" + ", ".join(prop_list) + "}"
     
@@ -363,3 +385,25 @@ class Neo4jAdapter(IStorageAdapter):
                 items.append(f"{key}: '{str(value)}'")
         
         return "{" + ", ".join(items) + "}"
+    
+    def _is_valid_relationship_type(self, relationship_type: str) -> bool:
+        """验证关系类型是否安全，防止注入攻击"""
+        import re
+        # 只允许字母、数字和下划线
+        pattern = r'^[a-zA-Z0-9_]+$'
+        return bool(re.match(pattern, relationship_type))
+    
+    def _clear_password(self) -> None:
+        """清除内存中的明文密码"""
+        if hasattr(self, '_password'):
+            delattr(self, '_password')
+            # 尝试覆盖内存中的密码数据
+            import sys
+            self._password = None
+            # 强制垃圾回收
+            import gc
+            gc.collect()
+    
+    def __del__(self):
+        """析构函数，确保密码被清除"""
+        self._clear_password()

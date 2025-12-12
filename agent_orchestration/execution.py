@@ -71,27 +71,28 @@ class ResourceManager(IResourceManager):
     
     async def release(self, allocation: ResourceAllocation) -> None:
         """释放资源"""
-        allocation_id = None
-        
-        # 查找分配ID - 首先尝试直接使用allocation对象中的ID（如果存在）
-        if hasattr(allocation, 'allocation_id') and allocation.allocation_id:
-            allocation_id = allocation.allocation_id
-        else:
-            # 回退到属性比较方法（保持向后兼容性）
-            for aid, alloc in self.allocated_resources.items():
-                # 比较资源分配的关键属性而不是对象引用
-                if (alloc.cpu_cores == allocation.cpu_cores and
-                    alloc.memory_mb == allocation.memory_mb and
-                    alloc.gpu_memory == allocation.gpu_memory):
-                    allocation_id = aid
-                    break
-        
-        if allocation_id:
-            async with self.resource_locks["global"]:
+        # 在global锁的保护下进行所有操作，确保原子性
+        async with self.resource_locks["global"]:
+            allocation_id = None
+            
+            # 查找分配ID - 首先尝试直接使用allocation对象中的ID（如果存在）
+            if hasattr(allocation, 'allocation_id') and allocation.allocation_id:
+                allocation_id = allocation.allocation_id
+            else:
+                # 回退到属性比较方法（保持向后兼容性）
+                for aid, alloc in self.allocated_resources.items():
+                    # 比较资源分配的关键属性而不是对象引用
+                    if (alloc.cpu_cores == allocation.cpu_cores and
+                        alloc.memory_mb == allocation.memory_mb and
+                        alloc.gpu_memory == allocation.gpu_memory):
+                        allocation_id = aid
+                        break
+            
+            if allocation_id:
                 del self.allocated_resources[allocation_id]
                 self.logger.info(f"资源释放成功: {allocation_id}")
-        else:
-            self.logger.warning("尝试释放未分配的资源")
+            else:
+                self.logger.warning("尝试释放未分配的资源")
     
     async def get_available_resources(self) -> Dict[str, Any]:
         """获取可用资源"""
@@ -501,17 +502,22 @@ class ExecutionEngine(IExecutionEngine):
             self.logger.error(f"任务处理失败: {e}")
 
 # 全局执行引擎实例（延迟初始化）
+import threading
+
 execution_engine = None
+_execution_engine_lock = threading.Lock()
 
 # 便捷函数
 async def get_execution_engine() -> ExecutionEngine:
-    """获取执行引擎实例"""
-    global execution_engine
-    if execution_engine is None:
-        execution_engine = ExecutionEngine()
-    if not execution_engine.running:
-        await execution_engine.start()
-    return execution_engine
+    """获取执行引擎实例（线程安全的单例模式）"""
+    global execution_engine, _execution_engine_lock
+    
+    with _execution_engine_lock:
+        if execution_engine is None:
+            execution_engine = ExecutionEngine()
+        if not execution_engine.running:
+            await execution_engine.start()
+        return execution_engine
 
 async def create_execution_engine() -> ExecutionEngine:
     """创建新的执行引擎实例"""

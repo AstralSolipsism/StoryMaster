@@ -260,9 +260,20 @@ class InstanceRepository(IInstanceRepository):
             logger.info(f"删除实例成功: {instance_id}")
             return True
             
+        except (ConnectionError, TimeoutError, DatabaseError) as e:
+            # 系统级错误：数据库连接问题、超时等
+            logger.error(f"删除实例时发生系统错误: {e}")
+            # 重新抛出系统错误，让上层处理
+            raise      
+        except (ValidationError, NotFoundError) as e:
+            # 业务逻辑错误：实例不存在、参数无效等
+            logger.warning(f"删除实例失败（业务逻辑）: {e}")
+            return False 
         except Exception as e:
-            logger.error(f"删除实例失败: {e}")
-            return False
+            # 其他未预期的异常
+            logger.error(f"删除实例时发生未预期错误: {e}")
+            # 可以重新抛出或根据业务需求处理
+            raise
     
     async def find(self, filters: InstanceFilter) -> QueryResult:
         """

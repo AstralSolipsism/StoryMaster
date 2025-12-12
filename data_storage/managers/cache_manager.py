@@ -99,7 +99,8 @@ class CacheManager(ICacheManager):
                 self._stats.hits += 1
                 
                 logger.debug(f"缓存命中: {key}")
-                return cache_item['value']
+                # 反序列化缓存值，确保数据格式一致
+                return self._deserialize_value(cache_item['value'])
             
             # 如果启用了持久化缓存，从存储获取
             if self._config.persistent_cache:

@@ -3,6 +3,7 @@ Agent配置管理器实现
 """
 
 import json
+import re
 import asyncio
 import aiohttp
 from typing import Dict, List, Optional, Any
@@ -274,8 +275,9 @@ class DynamicConfigLoader:
     async def load_from_remote(self, config_url: str) -> AgentConfig:
         """从远程服务加载配置"""
         try:
-            # 使用async with确保会话正确关闭
-            async with aiohttp.ClientSession() as session:
+            # 使用async with确保会话正确关闭，并启用SSL验证
+            connector = aiohttp.TCPConnector(verify_ssl=True)
+            async with aiohttp.ClientSession(connector=connector) as session:
                 # 处理mock对象的情况
                 if hasattr(session, 'get') and hasattr(session.get, '__call__'):
                     response_coro = session.get(config_url)

@@ -130,13 +130,7 @@ class EntityRepository(IEntityRepository):
                 return None
             
             entity_data = result[0].get('e')
-            entity = Entity(
-                id=entity_data.get('id'),
-                entity_type=entity_data.get('entity_type'),
-                properties=entity_data.get('properties', {}),
-                created_at=self._parse_datetime(entity_data.get('created_at')),
-                updated_at=self._parse_datetime(entity_data.get('updated_at'))
-            )
+            entity = entity = self._create_entity_from_data(entity_data)
             
             # 缓存实体
             if self._cache:
@@ -263,8 +257,13 @@ class EntityRepository(IEntityRepository):
                 params['name_pattern'] = filters.name_pattern
             
             if filters.property_filters:
+                # 验证属性名，防止注入攻击
+                allowed_props = ['name', 'description', 'entity_type']  # 预定义允许的属性
                 for prop_name, prop_value in filters.property_filters.items():
-                    where_conditions.append(f"e.properties.{prop_name} = $prop_{prop_name}")
+                    if prop_name not in allowed_props:
+                        raise ValueError(f"不允许的属性过滤: {prop_name}")
+                        
+                    where_conditions.append(f"e.{prop_name} = $prop_{prop_name}")
                     params[f'prop_{prop_name}'] = prop_value
             
             if filters.created_after:
@@ -279,17 +278,24 @@ class EntityRepository(IEntityRepository):
             if where_conditions:
                 query_parts.append("WHERE " + " AND ".join(where_conditions))
             
-            # 添加排序
+            # 添加排序 - 使用白名单验证排序字段
             if filters.order_by:
+                # 验证排序字段是否在白名单中
+                allowed_fields = ['id', 'entity_type', 'created_at', 'updated_at']
+                if filters.order_by not in allowed_fields:
+                    raise ValueError(f"不允许的排序字段: {filters.order_by}")
+                
                 order_direction = "DESC" if filters.order_desc else "ASC"
                 query_parts.append(f"ORDER BY e.{filters.order_by} {order_direction}")
             
-            # 添加分页
+            # 添加分页 - 使用参数化查询防止SQL注入
             if filters.limit:
-                query_parts.append(f"LIMIT {filters.limit}")
+                query_parts.append("LIMIT $limit")
+                params['limit'] = filters.limit
             
             if filters.offset:
-                query_parts.append(f"SKIP {filters.offset}")
+                query_parts.append("SKIP $offset")
+                params['offset'] = filters.offset
             
             query = " ".join(query_parts) + " RETURN e"
             
@@ -301,13 +307,7 @@ class EntityRepository(IEntityRepository):
             for record in result:
                 entity_data = record.get('e')
                 if entity_data:
-                    entity = Entity(
-                        id=entity_data.get('id'),
-                        entity_type=entity_data.get('entity_type'),
-                        properties=entity_data.get('properties', {}),
-                        created_at=self._parse_datetime(entity_data.get('created_at')),
-                        updated_at=self._parse_datetime(entity_data.get('updated_at'))
-                    )
+                    entity = self._create_entity_from_data(entity_data)
                     entities.append(entity)
             
             # 获取总数
@@ -351,13 +351,7 @@ class EntityRepository(IEntityRepository):
             for record in result:
                 entity_data = record.get('e')
                 if entity_data:
-                    entity = Entity(
-                        id=entity_data.get('id'),
-                        entity_type=entity_data.get('entity_type'),
-                        properties=entity_data.get('properties', {}),
-                        created_at=self._parse_datetime(entity_data.get('created_at')),
-                        updated_at=self._parse_datetime(entity_data.get('updated_at'))
-                    )
+                    entity = self._create_entity_from_data(entity_data)
                     entities.append(entity)
             
             return entities
@@ -389,13 +383,7 @@ class EntityRepository(IEntityRepository):
             for record in result:
                 entity_data = record.get('e')
                 if entity_data:
-                    entity = Entity(
-                        id=entity_data.get('id'),
-                        entity_type=entity_data.get('entity_type'),
-                        properties=entity_data.get('properties', {}),
-                        created_at=self._parse_datetime(entity_data.get('created_at')),
-                        updated_at=self._parse_datetime(entity_data.get('updated_at'))
-                    )
+                    entity = self._create_entity_from_data(entity_data)
                     entities.append(entity)
             
             return entities
@@ -435,13 +423,7 @@ class EntityRepository(IEntityRepository):
             for record in result:
                 entity_data = record.get('e')
                 if entity_data:
-                    entity = Entity(
-                        id=entity_data.get('id'),
-                        entity_type=entity_data.get('entity_type'),
-                        properties=entity_data.get('properties', {}),
-                        created_at=self._parse_datetime(entity_data.get('created_at')),
-                        updated_at=self._parse_datetime(entity_data.get('updated_at'))
-                    )
+                    entity = self._create_entity_from_data(entity_data)
                     entities.append(entity)
             
             return entities
@@ -514,3 +496,13 @@ class EntityRepository(IEntityRepository):
             return datetime.fromisoformat(datetime_str.replace('Z', '+00:00'))
         except (ValueError, AttributeError):
             return None
+        
+    def _create_entity_from_data(self, entity_data: Dict[str, Any]) -> Entity:
+        """从数据字典创建实体对象"""
+        return Entity(
+            id=entity_data.get('id'),
+            entity_type=entity_data.get('entity_type'),
+            properties=entity_data.get('properties', {}),
+            created_at=self._parse_datetime(entity_data.get('created_at')),
+            updated_at=self._parse_datetime(entity_data.get('updated_at'))
+        )

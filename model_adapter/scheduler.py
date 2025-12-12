@@ -482,6 +482,9 @@ class ModelScheduler:
                 break
             except Exception as e:
                 logging.error("Error in cache cleanup loop: %s", e, exc_info=True)
+                # 添加延迟避免快速重试导致CPU占用过高
+                await asyncio.sleep(60)  # 等待60秒后重试
+
     
     async def shutdown(self) -> None:
         """关闭调度器，清理资源"""

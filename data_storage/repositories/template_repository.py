@@ -105,9 +105,19 @@ class TemplateRepository(ITemplateRepository):
             logger.info(f"创建模板成功: {template.id}")
             return template
             
+        except ValidationError as e:
+            # 验证错误，直接重新抛出
+            logger.error(f"创建模板验证失败: {e}")
+            raise
+        except DataStorageError as e:
+            # 数据存储错误，直接重新抛出
+            logger.error(f"创建模板存储失败: {e}")
+            raise
         except Exception as e:
+            # 其他未知异常，包装为DataStorageError并保留原始异常链
             logger.error(f"创建模板失败: {e}")
-            raise DataStorageError(f"创建模板失败: {e}")
+            raise DataStorageError(f"创建模板失败: {e}") from e
+
     
     async def get_by_id(self, template_id: str) -> Optional[EntityTemplate]:
         """
@@ -137,18 +147,15 @@ class TemplateRepository(ITemplateRepository):
             if not result:
                 return None
             
+            # 检查结果是否为空，防止数组越界
+            if not result:
+                return None
+                
             template_data = result[0].get('t')
-            template = EntityTemplate(
-                id=template_data.get('id'),
-                name=template_data.get('name'),
-                description=template_data.get('description'),
-                entity_type=template_data.get('entity_type'),
-                properties_schema=template_data.get('properties_schema', {}),
-                default_properties=template_data.get('default_properties', {}),
-                validation_rules=template_data.get('validation_rules', {}),
-                created_at=self._parse_datetime(template_data.get('created_at')),
-                updated_at=self._parse_datetime(template_data.get('updated_at'))
-            )
+            if not template_data:
+                return None
+                
+            template = template = self._create_template_from_data(template_data)
             
             # 缓存模板
             if self._cache:
@@ -160,9 +167,15 @@ class TemplateRepository(ITemplateRepository):
             
             return template
             
+        except DataStorageError as e:
+            # 数据存储错误，直接重新抛出
+            logger.error(f"获取模板存储失败: {e}")
+            raise
         except Exception as e:
+            # 其他未知异常，包装为DataStorageError并保留原始异常链
             logger.error(f"获取模板失败: {e}")
-            raise DataStorageError(f"获取模板失败: {e}")
+            raise DataStorageError(f"获取模板失败: {e}") from e
+
     
     async def update(self, template: EntityTemplate) -> EntityTemplate:
         """
@@ -223,9 +236,20 @@ class TemplateRepository(ITemplateRepository):
             logger.info(f"更新模板成功: {template.id}")
             return template
             
+        except ValidationError as e:
+            # 验证错误，直接重新抛出
+            logger.error(f"更新模板验证失败: {e}")
+            raise
+        except DataStorageError as e:
+            # 数据存储错误，直接重新抛出
+            logger.error(f"更新模板存储失败: {e}")
+            raise
         except Exception as e:
+            # 其他未知异常，包装为DataStorageError并保留原始异常链
             logger.error(f"更新模板失败: {e}")
-            raise DataStorageError(f"更新模板失败: {e}")
+            raise DataStorageError(f"更新模板失败: {e}") from e
+
+
     
     async def delete(self, template_id: str) -> bool:
         """
@@ -265,9 +289,19 @@ class TemplateRepository(ITemplateRepository):
             logger.info(f"删除模板成功: {template_id}")
             return True
             
+        except ValidationError as e:
+            # 验证错误，直接重新抛出
+            logger.error(f"删除模板验证失败: {e}")
+            raise
+        except DataStorageError as e:
+            # 数据存储错误，直接重新抛出
+            logger.error(f"删除模板存储失败: {e}")
+            raise
         except Exception as e:
+            # 其他未知异常，返回False并记录日志
             logger.error(f"删除模板失败: {e}")
             return False
+
     
     async def find(self, filters: TemplateFilter) -> QueryResult:
         """
@@ -310,17 +344,24 @@ class TemplateRepository(ITemplateRepository):
             if where_conditions:
                 query_parts.append("WHERE " + " AND ".join(where_conditions))
             
-            # 添加排序
+            # 添加排序 - 使用白名单验证排序字段
             if filters.order_by:
+                # 验证排序字段是否在白名单中
+                allowed_fields = ['id', 'name', 'description', 'entity_type', 'created_at', 'updated_at']
+                if filters.order_by not in allowed_fields:
+                    raise ValueError(f"不允许的排序字段: {filters.order_by}")
+                
                 order_direction = "DESC" if filters.order_desc else "ASC"
                 query_parts.append(f"ORDER BY t.{filters.order_by} {order_direction}")
             
-            # 添加分页
+            # 添加分页 - 使用参数化查询防止SQL注入
             if filters.limit:
-                query_parts.append(f"LIMIT {filters.limit}")
+                query_parts.append("LIMIT $limit")
+                params['limit'] = filters.limit
             
             if filters.offset:
-                query_parts.append(f"SKIP {filters.offset}")
+                query_parts.append("SKIP $offset")
+                params['offset'] = filters.offset
             
             query = " ".join(query_parts) + " RETURN t"
             
@@ -332,25 +373,11 @@ class TemplateRepository(ITemplateRepository):
             for record in result:
                 template_data = record.get('t')
                 if template_data:
-                    template = EntityTemplate(
-                        id=template_data.get('id'),
-                        name=template_data.get('name'),
-                        description=template_data.get('description'),
-                        entity_type=template_data.get('entity_type'),
-                        properties_schema=template_data.get('properties_schema', {}),
-                        default_properties=template_data.get('default_properties', {}),
-                        validation_rules=template_data.get('validation_rules', {}),
-                        created_at=self._parse_datetime(template_data.get('created_at')),
-                        updated_at=self._parse_datetime(template_data.get('updated_at'))
-                    )
+                    template = self._create_template_from_data(template_data)
                     templates.append(template)
             
-            # 获取总数
-            count_query = "MATCH (t:EntityTemplate"
-            if where_conditions:
-                count_query += " WHERE " + " AND ".join(where_conditions)
-            count_query += ") RETURN count(t) as total"
-            
+            # 获取总数 - 提取公共查询逻辑到单独方法
+            count_query = self._build_count_query(where_conditions)
             count_result = await self._storage.query(count_query, params)
             total_count = count_result[0].get('total', 0) if count_result else 0
             
@@ -360,9 +387,15 @@ class TemplateRepository(ITemplateRepository):
                 has_more=(filters.offset or 0) + len(templates) < total_count
             )
             
+        except DataStorageError as e:
+            # 数据存储错误，直接重新抛出
+            logger.error(f"查找模板存储失败: {e}")
+            raise
         except Exception as e:
+            # 其他未知异常，包装为DataStorageError并保留原始异常链
             logger.error(f"查找模板失败: {e}")
-            raise DataStorageError(f"查找模板失败: {e}")
+            raise DataStorageError(f"查找模板失败: {e}") from e
+
     
     async def find_by_entity_type(self, entity_type: str) -> List[EntityTemplate]:
         """
@@ -386,24 +419,20 @@ class TemplateRepository(ITemplateRepository):
             for record in result:
                 template_data = record.get('t')
                 if template_data:
-                    template = EntityTemplate(
-                        id=template_data.get('id'),
-                        name=template_data.get('name'),
-                        description=template_data.get('description'),
-                        entity_type=template_data.get('entity_type'),
-                        properties_schema=template_data.get('properties_schema', {}),
-                        default_properties=template_data.get('default_properties', {}),
-                        validation_rules=template_data.get('validation_rules', {}),
-                        created_at=self._parse_datetime(template_data.get('created_at')),
-                        updated_at=self._parse_datetime(template_data.get('updated_at'))
-                    )
+                    template = self._create_template_from_data(template_data)
                     templates.append(template)
             
             return templates
             
+        except DataStorageError as e:
+            # 数据存储错误，直接重新抛出
+            logger.error(f"根据实体类型查找模板存储失败: {e}")
+            raise
         except Exception as e:
+            # 其他未知异常，包装为DataStorageError并保留原始异常链
             logger.error(f"根据实体类型查找模板失败: {e}")
-            raise DataStorageError(f"根据实体类型查找模板失败: {e}")
+            raise DataStorageError(f"根据实体类型查找模板失败: {e}") from e
+
     
     async def find_by_name(self, name: str) -> List[EntityTemplate]:
         """
@@ -427,24 +456,20 @@ class TemplateRepository(ITemplateRepository):
             for record in result:
                 template_data = record.get('t')
                 if template_data:
-                    template = EntityTemplate(
-                        id=template_data.get('id'),
-                        name=template_data.get('name'),
-                        description=template_data.get('description'),
-                        entity_type=template_data.get('entity_type'),
-                        properties_schema=template_data.get('properties_schema', {}),
-                        default_properties=template_data.get('default_properties', {}),
-                        validation_rules=template_data.get('validation_rules', {}),
-                        created_at=self._parse_datetime(template_data.get('created_at')),
-                        updated_at=self._parse_datetime(template_data.get('updated_at'))
-                    )
+                    template = self._create_template_from_data(template_data)
                     templates.append(template)
             
             return templates
             
+        except DataStorageError as e:
+            # 数据存储错误，直接重新抛出
+            logger.error(f"根据名称查找模板存储失败: {e}")
+            raise
         except Exception as e:
+            # 其他未知异常，包装为DataStorageError并保留原始异常链
             logger.error(f"根据名称查找模板失败: {e}")
-            raise DataStorageError(f"根据名称查找模板失败: {e}")
+            raise DataStorageError(f"根据名称查找模板失败: {e}") from e
+
     
     async def search(self, search_term: str, limit: int = 10) -> List[EntityTemplate]:
         """
@@ -458,6 +483,12 @@ class TemplateRepository(ITemplateRepository):
             匹配的模板列表
         """
         try:
+            # 输入验证
+            self._validate_search_input(search_term, limit)
+            
+            # 清理搜索词
+            cleaned_search_term = self._clean_search_term(search_term)
+            
             query = """
             MATCH (t:EntityTemplate)
             WHERE t.name CONTAINS $search_term 
@@ -467,7 +498,7 @@ class TemplateRepository(ITemplateRepository):
             """
             
             params = {
-                'search_term': search_term,
+                'search_term': cleaned_search_term,
                 'limit': limit
             }
             
@@ -477,24 +508,83 @@ class TemplateRepository(ITemplateRepository):
             for record in result:
                 template_data = record.get('t')
                 if template_data:
-                    template = EntityTemplate(
-                        id=template_data.get('id'),
-                        name=template_data.get('name'),
-                        description=template_data.get('description'),
-                        entity_type=template_data.get('entity_type'),
-                        properties_schema=template_data.get('properties_schema', {}),
-                        default_properties=template_data.get('default_properties', {}),
-                        validation_rules=template_data.get('validation_rules', {}),
-                        created_at=self._parse_datetime(template_data.get('created_at')),
-                        updated_at=self._parse_datetime(template_data.get('updated_at'))
-                    )
+                    template = self._create_template_from_data(template_data)
                     templates.append(template)
             
             return templates
             
+        except DataStorageError as e:
+            # 数据存储错误，直接重新抛出
+            logger.error(f"搜索模板存储失败: {e}")
+            raise
         except Exception as e:
+            # 其他未知异常，包装为DataStorageError并保留原始异常链
             logger.error(f"搜索模板失败: {e}")
-            raise DataStorageError(f"搜索模板失败: {e}")
+            raise DataStorageError(f"搜索模板失败: {e}") from e
+
+    
+    def _validate_search_input(self, search_term: str, limit: int) -> None:
+        """
+        验证搜索输入参数
+        
+        Args:
+            search_term: 搜索词
+            limit: 结果限制
+            
+        Raises:
+            ValidationError: 如果输入参数无效
+        """
+        # 验证搜索词
+        if not search_term:
+            raise ValidationError("搜索词不能为空")
+        
+        # 限制搜索词长度（防止过长的查询）
+        if len(search_term) > 200:
+            raise ValidationError(f"搜索词过长，最大长度为200个字符，当前为{len(search_term)}个字符")
+        
+        # 验证搜索词内容（防止特殊字符攻击）
+        # 允许字母、数字、中文、空格和一些常见标点符号
+        import re
+        pattern = r'^[\w\s\u4e00-\u9fa5\-_.,!?@#%&*()+=:;\'"<>\[\]{}|\\/]*$'
+        if not re.match(pattern, search_term):
+            raise ValidationError("搜索词包含无效字符")
+        
+        # 验证limit参数
+        if not isinstance(limit, int):
+            raise ValidationError("limit参数必须是整数")
+        
+        if limit <= 0:
+            raise ValidationError("limit参数必须大于0")
+        
+        # 限制最大返回结果数量（防止资源耗尽）
+        if limit > 100:
+            raise ValidationError(f"limit参数最大为100，当前为{limit}")
+    
+    def _clean_search_term(self, search_term: str) -> str:
+        """
+        清理搜索词
+        
+        Args:
+            search_term: 原始搜索词
+            
+        Returns:
+            清理后的搜索词
+        """
+        # 去除首尾空格
+        cleaned = search_term.strip()
+        
+        # 限制长度（再次确保）
+        if len(cleaned) > 200:
+            cleaned = cleaned[:200]
+        
+        # 转义特殊字符（防止Cypher注入）
+        # 注意：虽然使用参数化查询，但这里额外增加安全性
+        import re
+        # 转义可能引起问题的特殊字符
+        cleaned = re.sub(r'([\\\'\"])', r'\\\1', cleaned)
+        
+        return cleaned
+
     
     async def count(self, filters: Optional[TemplateFilter] = None) -> int:
         """
@@ -512,6 +602,7 @@ class TemplateRepository(ITemplateRepository):
             
             if filters:
                 where_conditions = []
+                params = {}
                 
                 if filters.entity_types:
                     where_conditions.append("t.entity_type IN $entity_types")
@@ -525,13 +616,9 @@ class TemplateRepository(ITemplateRepository):
                     where_conditions.append("t.description CONTAINS $description_pattern")
                     params['description_pattern'] = filters.description_pattern
                 
-                if where_conditions:
-                    query_parts.append("WHERE " + " AND ".join(where_conditions))
-            
-            query_parts.append("RETURN count(t) as total")
-            query = " ".join(query_parts)
-            
-            result = await self._storage.query(query, params)
+                # 使用公共方法构建查询
+                query = self._build_count_query(where_conditions)
+                result = await self._storage.query(query, params)
             
             return result[0].get('total', 0) if result else 0
             
@@ -559,9 +646,14 @@ class TemplateRepository(ITemplateRepository):
             
             return result[0].get('instance_count', 0) if result else 0
             
+        except DataStorageError as e:
+            # 数据存储错误，直接重新抛出
+            logger.error(f"获取模板实例数量存储失败: {e}")
+            raise
         except Exception as e:
+            # 其他未知异常，包装为DataStorageError并保留原始异常链
             logger.error(f"获取模板实例数量失败: {e}")
-            raise DataStorageError(f"获取模板实例数量失败: {e}")
+            raise DataStorageError(f"获取模板实例数量失败: {e}") from e
     
     async def _validate_template(self, template: EntityTemplate) -> None:
         """验证模板数据"""
@@ -595,3 +687,33 @@ class TemplateRepository(ITemplateRepository):
             return datetime.fromisoformat(datetime_str.replace('Z', '+00:00'))
         except (ValueError, AttributeError):
             return None
+    
+    def _build_count_query(self, where_conditions: List[str]) -> str:
+        """构建计数查询"""
+        query = "MATCH (t:EntityTemplate"
+        if where_conditions:
+            query += " WHERE " + " AND ".join(where_conditions)
+        query += ") RETURN count(t) as total"
+        return query
+    
+    def _create_template_from_data(self, template_data: Dict[str, Any]) -> EntityTemplate:
+        """
+        从数据字典创建EntityTemplate对象
+        
+        Args:
+            template_data: 包含模板数据的字典
+            
+        Returns:
+            EntityTemplate对象
+        """
+        return EntityTemplate(
+            id=template_data.get('id'),
+            name=template_data.get('name'),
+            description=template_data.get('description'),
+            entity_type=template_data.get('entity_type'),
+            properties_schema=template_data.get('properties_schema', {}),
+            default_properties=template_data.get('default_properties', {}),
+            validation_rules=template_data.get('validation_rules', {}),
+            created_at=self._parse_datetime(template_data.get('created_at')),
+            updated_at=self._parse_datetime(template_data.get('updated_at'))
+        )

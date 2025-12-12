@@ -127,9 +127,10 @@ class InstantiationManager(IInstantiationManager):
                 template, instance_data, context
             )
             
-            # 创建实例
+            # 创建实例 - 使用UUID确保ID唯一性
+            import uuid
             instance = EntityInstance(
-                id=f"{template.id}_instance_{datetime.now().timestamp()}",
+                id=f"{template.id}_instance_{uuid.uuid4()}",
                 template_id=template.id,
                 entity_type=template.entity_type,
                 properties=transformed_data,

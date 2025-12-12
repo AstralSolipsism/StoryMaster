@@ -160,8 +160,17 @@ class FileSystemAdapter(IFileStorage):
                 return True
             
             if recursive:
+                # 使用异步方式递归删除目录，避免阻塞事件循环
+                import asyncio
+                import os
                 import shutil
-                shutil.rmtree(full_path)
+                
+                loop = asyncio.get_event_loop()
+                
+                def _recursive_delete():
+                    shutil.rmtree(full_path)
+                
+                await loop.run_in_executor(None, _recursive_delete)
             else:
                     await aiofiles.os.rmdir(full_path)
             
@@ -245,15 +254,24 @@ class FileSystemAdapter(IFileStorage):
             full_path = self._get_full_path(directory)
             total_size = 0
             
-            # 使用同步的os.walk替代aiofiles.os.walk
+            # 使用异步方式遍历目录，避免阻塞事件循环
+            import asyncio
             import os
-            for root, dirs, files in os.walk(full_path):
-                for file in files:
-                    file_path = Path(root) / file
-                    if os.path.isfile(file_path):
-                        stat = os.stat(file_path)
-                        total_size += stat.st_size
             
+            # 使用run_in_executor将同步操作移到线程池中执行
+            loop = asyncio.get_event_loop()
+            
+            def _calculate_size():
+                size = 0
+                for root, dirs, files in os.walk(full_path):
+                    for file in files:
+                        file_path = Path(root) / file
+                        if os.path.isfile(file_path):
+                            stat = os.stat(file_path)
+                            size += stat.st_size
+                return size
+            
+            total_size = await loop.run_in_executor(None, _calculate_size)
             return total_size
             
         except Exception as e:
@@ -261,11 +279,17 @@ class FileSystemAdapter(IFileStorage):
             return 0
     
     def _get_full_path(self, file_path: str) -> Path:
-        """获取完整路径"""
-        if os.path.isabs(file_path):
-            return Path(file_path)
-        else:
-            return self.base_path / file_path
+        """获取完整路径，防止路径遍历攻击"""
+        # 规范化路径，解析任何..或.组件
+        normalized_path = Path(file_path).as_posix()
+        
+        # 检查是否包含路径遍历字符
+        if '..' in normalized_path or normalized_path.startswith('/'):
+            self.logger.warning(f"检测到潜在路径遍历攻击: {file_path}")
+            raise ValueError(f"不安全的路径: {file_path}")
+        
+        # 始终返回相对于base_path的路径
+        return (self.base_path / file_path).resolve()
     
     async def _ensure_directory_exists(self, directory: Path) -> None:
         """确保目录存在"""

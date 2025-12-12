@@ -28,10 +28,16 @@ class RedisAdapter(ICacheManager):
             password: 密码
             max_connections: 最大连接数
         """
+        import hashlib
+        import os
+        
         self.host = host
         self.port = port
         self.db = db
-        self.password = password
+        # 对密码进行哈希处理，避免明文存储
+        self._password_hash = hashlib.sha256(password.encode()).hexdigest() if password else None
+        # 在内存中保留明文密码仅用于连接，使用后应清除
+        self._password = password
         self.max_connections = max_connections
         
         self.client = None
@@ -46,7 +52,7 @@ class RedisAdapter(ICacheManager):
                 host=self.host,
                 port=self.port,
                 db=self.db,
-                password=self.password,
+                password=self._password,
                 max_connections=self.max_connections,
                 retry_on_timeout=True,
                 socket_keepalive=True,
@@ -56,6 +62,9 @@ class RedisAdapter(ICacheManager):
             
             # 创建Redis客户端
             self.client = redis.Redis(connection_pool=self.connection_pool)
+            
+            # 连接成功后，清除内存中的明文密码
+            self._clear_password()
             
             # 测试连接
             await self.client.ping()
@@ -348,3 +357,18 @@ class RedisAdapter(ICacheManager):
         except Exception as e:
             self.logger.error(f"获取连接信息时发生错误: {e}")
             return {"connected": False, "error": str(e)}
+    
+    def _clear_password(self) -> None:
+        """清除内存中的明文密码"""
+        if hasattr(self, '_password'):
+            delattr(self, '_password')
+            # 尝试覆盖内存中的密码数据
+            import sys
+            self._password = None
+            # 强制垃圾回收
+            import gc
+            gc.collect()
+    
+    def __del__(self):
+        """析构函数，确保密码被清除"""
+        self._clear_password()

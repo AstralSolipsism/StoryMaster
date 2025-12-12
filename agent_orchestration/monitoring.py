@@ -605,8 +605,20 @@ class MonitoringScheduler(IMonitoringScheduler):
         
         return total_utilization / len(self.task_scheduler.load_balancer.agent_loads)
 
-# 全局监控调度器实例
-monitoring_scheduler = MonitoringScheduler()
+# 全局监控调度器实例 - 使用单例模式确保线程安全
+import threading
+
+_monitoring_scheduler_lock = threading.Lock()
+_monitoring_scheduler = None
+
+def get_monitoring_scheduler() -> MonitoringScheduler:
+    """获取监控调度器实例（线程安全的单例模式）"""
+    global _monitoring_scheduler, _monitoring_scheduler_lock
+    
+    with _monitoring_scheduler_lock:
+        if _monitoring_scheduler is None:
+            _monitoring_scheduler = MonitoringScheduler()
+        return _monitoring_scheduler
 
 # 便捷函数
 async def get_monitoring_scheduler() -> MonitoringScheduler:
