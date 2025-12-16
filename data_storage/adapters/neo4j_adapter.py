@@ -38,11 +38,18 @@ class Neo4jAdapter(IStorageAdapter):
         """
         import hashlib
         import os
+        import secrets
         
         self.uri = uri
         self.username = username
-        # 对密码进行哈希处理，避免明文存储
-        self._password_hash = hashlib.sha256(password.encode()).hexdigest()
+        # 使用更安全的密码哈希算法，添加盐值
+        self._salt = secrets.token_hex(16)
+        self._password_hash = hashlib.pbkdf2_hmac(
+            'sha256',
+            password.encode(),
+            self._salt.encode(),
+            100000  # 迭代次数
+        ).hex()
         # 在内存中保留明文密码仅用于连接，使用后应清除
         self._password = password
         self.max_connection_lifetime = max_connection_lifetime
@@ -398,11 +405,8 @@ class Neo4jAdapter(IStorageAdapter):
         if hasattr(self, '_password'):
             delattr(self, '_password')
             # 尝试覆盖内存中的密码数据
-            import sys
             self._password = None
-            # 强制垃圾回收
-            import gc
-            gc.collect()
+            # 不强制垃圾回收，让Python的垃圾回收器自然处理
     
     def __del__(self):
         """析构函数，确保密码被清除"""

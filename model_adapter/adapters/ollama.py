@@ -85,11 +85,9 @@ class OllamaAdapter(BaseModelAdapter):
         request_body = {**self._build_chat_request(params), 'stream': True}
         
         timeout = aiohttp.ClientTimeout(total=self.config.get('timeout', 60))
-        # 强制启用SSL验证，记录警告如果配置禁用
-        ssl_verify = self.config.get('ollama_ssl_verify', True)
-        if not ssl_verify:
-            self.logger.warning("SSL验证已禁用，这可能存在安全风险")
-        connector = aiohttp.TCPConnector(ssl=ssl_verify)
+        # 强制启用SSL验证，不允许禁用
+        # 移除禁用SSL验证的选项，提高安全性
+        connector = aiohttp.TCPConnector(ssl=True)
         async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
             async with session.post(
                 f"{self.base_url}/api/chat",

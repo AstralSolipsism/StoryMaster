@@ -621,11 +621,12 @@ def get_monitoring_scheduler() -> MonitoringScheduler:
         return _monitoring_scheduler
 
 # 便捷函数
-async def get_monitoring_scheduler() -> MonitoringScheduler:
-    """获取监控调度器实例"""
-    if not monitoring_scheduler.running:
-        await monitoring_scheduler.start()
-    return monitoring_scheduler
+async def get_running_monitoring_scheduler() -> MonitoringScheduler:
+    """获取并启动监控调度器实例"""
+    scheduler = get_monitoring_scheduler()
+    if not scheduler.running:
+        await scheduler.start()
+    return scheduler
 
 async def create_monitoring_scheduler(strategy: SchedulingStrategy = SchedulingStrategy.PRIORITY) -> MonitoringScheduler:
     """创建新的监控调度器实例"""

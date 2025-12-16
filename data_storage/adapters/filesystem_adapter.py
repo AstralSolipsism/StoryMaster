@@ -172,7 +172,7 @@ class FileSystemAdapter(IFileStorage):
                 
                 await loop.run_in_executor(None, _recursive_delete)
             else:
-                    await aiofiles.os.rmdir(full_path)
+                await aiofiles.os.rmdir(full_path)
             
             self.logger.debug(f"成功删除目录: {full_path}")
             return True
@@ -280,16 +280,29 @@ class FileSystemAdapter(IFileStorage):
     
     def _get_full_path(self, file_path: str) -> Path:
         """获取完整路径，防止路径遍历攻击"""
-        # 规范化路径，解析任何..或.组件
-        normalized_path = Path(file_path).as_posix()
-        
-        # 检查是否包含路径遍历字符
-        if '..' in normalized_path or normalized_path.startswith('/'):
-            self.logger.warning(f"检测到潜在路径遍历攻击: {file_path}")
-            raise ValueError(f"不安全的路径: {file_path}")
-        
-        # 始终返回相对于base_path的路径
-        return (self.base_path / file_path).resolve()
+        try:
+            # 规范化路径，解析任何..或.组件
+            normalized_path = Path(file_path).resolve()
+            
+            # 检查解析后的路径是否在base_path范围内
+            base_path = self.base_path.resolve()
+            try:
+                # 使用commonpath检查路径是否在允许范围内
+                common_path = Path(os.path.commonpath([str(base_path), str(normalized_path)]))
+                if str(common_path).startswith(str(base_path)):
+                    # 确保最终路径在base_path下
+                    final_path = base_path / normalized_path.relative_to(base_path)
+                    return final_path.resolve()
+                else:
+                    self.logger.warning(f"检测到路径遍历攻击: {file_path}")
+                    raise ValueError(f"不安全的路径: {file_path}")
+            except ValueError:
+                # relative_to失败，说明路径不在base_path下
+                self.logger.warning(f"检测到路径遍历攻击: {file_path}")
+                raise ValueError(f"不安全的路径: {file_path}")
+        except (OSError, ValueError) as e:
+            self.logger.warning(f"路径解析错误: {file_path}, 错误: {e}")
+            raise ValueError(f"无效的路径: {file_path}") from e
     
     async def _ensure_directory_exists(self, directory: Path) -> None:
         """确保目录存在"""

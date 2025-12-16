@@ -7,7 +7,6 @@
 import logging
 from typing import Dict, List, Optional, Any, Union
 from datetime import datetime
-
 from ..interfaces import (
     IInstanceRepository,
     IStorageAdapter,
@@ -16,7 +15,8 @@ from ..interfaces import (
     InstanceFilter,
     QueryResult,
     DataStorageError,
-    ValidationError
+    ValidationError,
+    EntityTemplate
 )
 
 logger = logging.getLogger(__name__)
@@ -260,15 +260,15 @@ class InstanceRepository(IInstanceRepository):
             logger.info(f"删除实例成功: {instance_id}")
             return True
             
-        except (ConnectionError, TimeoutError, DatabaseError) as e:
+        except (ConnectionError, TimeoutError) as e:
             # 系统级错误：数据库连接问题、超时等
             logger.error(f"删除实例时发生系统错误: {e}")
             # 重新抛出系统错误，让上层处理
-            raise      
-        except (ValidationError, NotFoundError) as e:
+            raise DataStorageError(f"删除实例时发生系统错误: {e}") from e
+        except ValidationError as e:
             # 业务逻辑错误：实例不存在、参数无效等
             logger.warning(f"删除实例失败（业务逻辑）: {e}")
-            return False 
+            return False
         except Exception as e:
             # 其他未预期的异常
             logger.error(f"删除实例时发生未预期错误: {e}")
@@ -305,7 +305,12 @@ class InstanceRepository(IInstanceRepository):
                 params['statuses'] = filters.statuses
             
             if filters.property_filters:
+                # 验证属性名，防止注入攻击
+                allowed_props = ['name', 'description', 'status', 'entity_type']  # 预定义允许的属性
                 for prop_name, prop_value in filters.property_filters.items():
+                    if prop_name not in allowed_props:
+                        raise ValueError(f"不允许的属性过滤: {prop_name}")
+                    
                     where_conditions.append(f"i.properties.{prop_name} = $prop_{prop_name}")
                     params[f'prop_{prop_name}'] = prop_value
             
@@ -326,12 +331,14 @@ class InstanceRepository(IInstanceRepository):
                 order_direction = "DESC" if filters.order_desc else "ASC"
                 query_parts.append(f"ORDER BY i.{filters.order_by} {order_direction}")
             
-            # 添加分页
+            # 添加分页 - 使用参数化查询防止SQL注入
             if filters.limit:
-                query_parts.append(f"LIMIT {filters.limit}")
+                query_parts.append("LIMIT $limit")
+                params['limit'] = filters.limit
             
             if filters.offset:
-                query_parts.append(f"SKIP {filters.offset}")
+                query_parts.append("SKIP $offset")
+                params['offset'] = filters.offset
             
             query = " ".join(query_parts) + " RETURN i"
             
@@ -612,7 +619,7 @@ class InstanceRepository(IInstanceRepository):
     
     def _create_template_from_data(self, template_data: Dict[str, Any]) -> 'EntityTemplate':
         """从模板数据创建模板对象"""
-        from ..interfaces import EntityTemplate
+
         
         return EntityTemplate(
             id=template_data.get('id'),

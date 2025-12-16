@@ -130,7 +130,7 @@ class EntityRepository(IEntityRepository):
                 return None
             
             entity_data = result[0].get('e')
-            entity = entity = self._create_entity_from_data(entity_data)
+            entity = self._create_entity_from_data(entity_data)
             
             # 缓存实体
             if self._cache:
@@ -458,7 +458,12 @@ class EntityRepository(IEntityRepository):
                     params['name_pattern'] = filters.name_pattern
                 
                 if filters.property_filters:
+                    # 验证属性名，防止注入攻击
+                    allowed_props = ['name', 'description', 'entity_type']  # 预定义允许的属性
                     for prop_name, prop_value in filters.property_filters.items():
+                        if prop_name not in allowed_props:
+                            raise ValueError(f"不允许的属性过滤: {prop_name}")
+                        
                         where_conditions.append(f"e.properties.{prop_name} = $prop_{prop_name}")
                         params[f'prop_{prop_name}'] = prop_value
                 
@@ -484,7 +489,7 @@ class EntityRepository(IEntityRepository):
         if not entity.entity_type:
             raise ValidationError("实体类型不能为空")
         
-        if not entity.properties.get('name'):
+        if not entity.properties or not entity.properties.get('name'):
             raise ValidationError("实体名称不能为空")
     
     def _parse_datetime(self, datetime_str: Optional[str]) -> Optional[datetime]:

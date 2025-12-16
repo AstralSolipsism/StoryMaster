@@ -148,14 +148,13 @@ class TemplateRepository(ITemplateRepository):
                 return None
             
             # 检查结果是否为空，防止数组越界
-            if not result:
-                return None
+            # 注意：这里不需要重复检查，第147行已经检查过了
                 
             template_data = result[0].get('t')
             if not template_data:
                 return None
                 
-            template = template = self._create_template_from_data(template_data)
+            template = self._create_template_from_data(template_data)
             
             # 缓存模板
             if self._cache:
@@ -619,6 +618,10 @@ class TemplateRepository(ITemplateRepository):
                 # 使用公共方法构建查询
                 query = self._build_count_query(where_conditions)
                 result = await self._storage.query(query, params)
+            else:
+                # 处理filters为None的情况
+                query = self._build_count_query([])
+                result = await self._storage.query(query, {})
             
             return result[0].get('total', 0) if result else 0
             
@@ -690,10 +693,10 @@ class TemplateRepository(ITemplateRepository):
     
     def _build_count_query(self, where_conditions: List[str]) -> str:
         """构建计数查询"""
-        query = "MATCH (t:EntityTemplate"
+        query = "MATCH (t:EntityTemplate)"
         if where_conditions:
             query += " WHERE " + " AND ".join(where_conditions)
-        query += ") RETURN count(t) as total"
+        query += " RETURN count(t) as total"
         return query
     
     def _create_template_from_data(self, template_data: Dict[str, Any]) -> EntityTemplate:
