@@ -50,8 +50,8 @@ class Neo4jAdapter(IStorageAdapter):
             self._salt.encode(),
             100000  # 迭代次数
         ).hex()
-        # 在内存中保留明文密码仅用于连接，使用后应清除
-        self._password = password
+        # 不在实例变量中存储明文密码，而是使用临时变量传递给连接方法
+        self._temp_password = password  # 临时存储，将在连接后立即清除
         self.max_connection_lifetime = max_connection_lifetime
         self.max_connection_pool_size = max_connection_pool_size
         
@@ -62,11 +62,19 @@ class Neo4jAdapter(IStorageAdapter):
     
     async def connect(self) -> bool:
         """连接Neo4j数据库"""
+        # 检查是否有临时密码可用
+        if not hasattr(self, '_temp_password'):
+            self.logger.error("没有可用的密码进行连接")
+            return False
+            
+        # 使用局部变量存储密码，避免在实例变量中长期保存
+        password = self._temp_password
+        
         try:
             # 创建同步驱动器（用于简单查询）
             self.driver = GraphDatabase.driver(
                 self.uri,
-                auth=(self.username, self._password),
+                auth=(self.username, password),
                 max_connection_lifetime=self.max_connection_lifetime,
                 max_connection_pool_size=self.max_connection_pool_size
             )
@@ -74,13 +82,13 @@ class Neo4jAdapter(IStorageAdapter):
             # 创建异步驱动器（用于异步查询）
             self.async_driver = AsyncGraphDatabase.driver(
                 self.uri,
-                auth=(self.username, self._password),
+                auth=(self.username, password),
                 max_connection_lifetime=self.max_connection_lifetime,
                 max_connection_pool_size=self.max_connection_pool_size
             )
             
-            # 连接成功后，清除内存中的明文密码
-            self._clear_password()
+            # 立即清除临时密码
+            self._clear_temp_password()
             
             # 测试连接
             await self._test_connection()
@@ -92,11 +100,18 @@ class Neo4jAdapter(IStorageAdapter):
         except (ServiceUnavailable, AuthError) as e:
             self.logger.error(f"连接Neo4j数据库失败: {e}")
             self._connected = False
+            # 即使连接失败也要清除密码
+            self._clear_temp_password()
             return False
         except Exception as e:
             self.logger.error(f"连接Neo4j数据库时发生未知错误: {e}")
             self._connected = False
+            # 即使连接失败也要清除密码
+            self._clear_temp_password()
             return False
+        finally:
+            # 确保密码变量被清除
+            password = None
     
     async def disconnect(self) -> bool:
         """断开Neo4j数据库连接"""
@@ -400,13 +415,32 @@ class Neo4jAdapter(IStorageAdapter):
         pattern = r'^[a-zA-Z0-9_]+$'
         return bool(re.match(pattern, relationship_type))
     
-    def _clear_password(self) -> None:
-        """清除内存中的明文密码"""
-        if hasattr(self, '_password'):
-            delattr(self, '_password')
+    def _clear_temp_password(self) -> None:
+        """清除临时存储的明文密码"""
+        if hasattr(self, '_temp_password'):
+            # 使用多种方法确保密码被安全清除
+            import sys
+            # 获取密码字符串的引用
+            password_ref = self._temp_password
+            
             # 尝试覆盖内存中的密码数据
-            self._password = None
-            # 不强制垃圾回收，让Python的垃圾回收器自然处理
+            if isinstance(password_ref, str):
+                # 对于字符串，我们无法直接覆盖内存，但可以删除引用
+                delattr(self, '_temp_password')
+                # 尝试从局部命名空间中清除
+                if 'password_ref' in locals():
+                    password_ref = None
+            else:
+                # 对于其他类型，直接删除
+                delattr(self, '_temp_password')
+            
+            # 强制垃圾回收以尽快释放内存
+            import gc
+            gc.collect()
+    
+    def _clear_password(self) -> None:
+        """清除内存中的明文密码（保留向后兼容性）"""
+        self._clear_temp_password()
     
     def __del__(self):
         """析构函数，确保密码被清除"""

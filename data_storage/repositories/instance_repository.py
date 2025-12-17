@@ -83,7 +83,6 @@ class InstanceRepository(IInstanceRepository):
                 template_id: $template_id,
                 entity_type: $entity_type,
                 properties: $properties,
-                status: $status,
                 created_at: $created_at,
                 updated_at: $updated_at
             })
@@ -96,7 +95,6 @@ class InstanceRepository(IInstanceRepository):
                 'id': instance.id,
                 'entity_type': instance.entity_type,
                 'properties': instance.properties,
-                'status': instance.status,
                 'created_at': instance.created_at.isoformat() if instance.created_at else datetime.now().isoformat(),
                 'updated_at': instance.updated_at.isoformat() if instance.updated_at else datetime.now().isoformat()
             }
@@ -108,9 +106,10 @@ class InstanceRepository(IInstanceRepository):
             
             # 缓存实例
             if self._cache:
+                import dataclasses
                 await self._cache.set(
                     f"instance:{instance.id}",
-                    instance.dict(),
+                    dataclasses.asdict(instance),
                     ttl=3600  # 1小时
                 )
             
@@ -156,20 +155,21 @@ class InstanceRepository(IInstanceRepository):
             
             instance = EntityInstance(
                 id=instance_data.get('id'),
+                instance_id=instance_data.get('id'),
                 template_id=instance_data.get('template_id'),
+                template_type=instance_data.get('entity_type'),
                 entity_type=instance_data.get('entity_type'),
                 properties=instance_data.get('properties', {}),
-                status=instance_data.get('status', 'active'),
                 created_at=self._parse_datetime(instance_data.get('created_at')),
-                updated_at=self._parse_datetime(instance_data.get('updated_at')),
-                template=self._create_template_from_data(template_data) if template_data else None
+                updated_at=self._parse_datetime(instance_data.get('updated_at'))
             )
             
             # 缓存实例
             if self._cache:
+                import dataclasses
                 await self._cache.set(
                     f"instance:{instance_id}",
-                    instance.dict(),
+                    dataclasses.asdict(instance),
                     ttl=3600
                 )
             
@@ -198,20 +198,25 @@ class InstanceRepository(IInstanceRepository):
             if not existing:
                 raise ValidationError(f"实例不存在: {instance.id}")
             
+            # 记录更新前的状态用于调试
+            logger.debug(f"更新实例前 - 原始updated_at: {instance.updated_at}")
+            
             # 更新实例
             query = """
             MATCH (i:EntityInstance {id: $id})
             SET i.properties = $properties,
-                i.status = $status,
                 i.updated_at = $updated_at
             RETURN i
             """
             
+            # 记录数据库更新时的时间戳
+            db_updated_at = datetime.now().isoformat()
+            logger.debug(f"数据库更新时间戳: {db_updated_at}")
+            
             params = {
                 'id': instance.id,
                 'properties': instance.properties,
-                'status': instance.status,
-                'updated_at': datetime.now().isoformat()
+                'updated_at': db_updated_at
             }
             
             result = await self._storage.query(query, params)
@@ -219,11 +224,20 @@ class InstanceRepository(IInstanceRepository):
             if not result:
                 raise DataStorageError("更新实例失败")
             
-            # 更新缓存
+            # 更新缓存 - 修复：更新instance对象的updated_at字段，确保缓存与数据库一致
             if self._cache:
+                # 更新instance对象的updated_at字段，使其与数据库中的值一致
+                instance.updated_at = self._parse_datetime(db_updated_at)
+                
+                # 记录修复后的缓存数据状态
+                import dataclasses
+                cache_data = dataclasses.asdict(instance)
+                logger.debug(f"修复后缓存数据updated_at: {cache_data.get('updated_at')}")
+                logger.info(f"缓存一致性已修复: 数据库updated_at={db_updated_at}, 缓存updated_at={cache_data.get('updated_at')}")
+                
                 await self._cache.set(
                     f"instance:{instance.id}",
-                    instance.dict(),
+                    cache_data,
                     ttl=3600
                 )
             
@@ -352,10 +366,11 @@ class InstanceRepository(IInstanceRepository):
                 if instance_data:
                     instance = EntityInstance(
                         id=instance_data.get('id'),
+                        instance_id=instance_data.get('id'),
                         template_id=instance_data.get('template_id'),
+                        template_type=instance_data.get('entity_type'),
                         entity_type=instance_data.get('entity_type'),
                         properties=instance_data.get('properties', {}),
-                        status=instance_data.get('status', 'active'),
                         created_at=self._parse_datetime(instance_data.get('created_at')),
                         updated_at=self._parse_datetime(instance_data.get('updated_at'))
                     )
@@ -404,10 +419,11 @@ class InstanceRepository(IInstanceRepository):
                 if instance_data:
                     instance = EntityInstance(
                         id=instance_data.get('id'),
+                        instance_id=instance_data.get('id'),
                         template_id=instance_data.get('template_id'),
+                        template_type=instance_data.get('entity_type'),
                         entity_type=instance_data.get('entity_type'),
                         properties=instance_data.get('properties', {}),
-                        status=instance_data.get('status', 'active'),
                         created_at=self._parse_datetime(instance_data.get('created_at')),
                         updated_at=self._parse_datetime(instance_data.get('updated_at'))
                     )
@@ -418,6 +434,46 @@ class InstanceRepository(IInstanceRepository):
         except Exception as e:
             logger.error(f"根据模板查找实例失败: {e}")
             raise DataStorageError(f"根据模板查找实例失败: {e}")
+    
+    async def find_by_template_id(self, template_id: str) -> List[EntityInstance]:
+        """
+        根据模板ID查找实例
+        
+        Args:
+            template_id: 模板ID
+            
+        Returns:
+            实例列表
+        """
+        try:
+            query = """
+            MATCH (i:EntityInstance {template_id: $template_id})
+            RETURN i
+            """
+            
+            result = await self._storage.query(query, {"template_id": template_id})
+            
+            instances = []
+            for record in result:
+                instance_data = record.get('i')
+                if instance_data:
+                    instance = EntityInstance(
+                        id=instance_data.get('id'),
+                        instance_id=instance_data.get('id'),
+                        template_id=instance_data.get('template_id'),
+                        template_type=instance_data.get('entity_type'),
+                        entity_type=instance_data.get('entity_type'),
+                        properties=instance_data.get('properties', {}),
+                        created_at=self._parse_datetime(instance_data.get('created_at')),
+                        updated_at=self._parse_datetime(instance_data.get('updated_at'))
+                    )
+                    instances.append(instance)
+            
+            return instances
+            
+        except Exception as e:
+            logger.error(f"根据模板ID查找实例失败: {e}")
+            raise DataStorageError(f"根据模板ID查找实例失败: {e}")
     
     async def find_by_type(self, entity_type: str) -> List[EntityInstance]:
         """
@@ -443,10 +499,11 @@ class InstanceRepository(IInstanceRepository):
                 if instance_data:
                     instance = EntityInstance(
                         id=instance_data.get('id'),
+                        instance_id=instance_data.get('id'),
                         template_id=instance_data.get('template_id'),
+                        template_type=instance_data.get('entity_type'),
                         entity_type=instance_data.get('entity_type'),
                         properties=instance_data.get('properties', {}),
-                        status=instance_data.get('status', 'active'),
                         created_at=self._parse_datetime(instance_data.get('created_at')),
                         updated_at=self._parse_datetime(instance_data.get('updated_at'))
                     )
@@ -482,10 +539,11 @@ class InstanceRepository(IInstanceRepository):
                 if instance_data:
                     instance = EntityInstance(
                         id=instance_data.get('id'),
+                        instance_id=instance_data.get('id'),
                         template_id=instance_data.get('template_id'),
+                        template_type=instance_data.get('entity_type'),
                         entity_type=instance_data.get('entity_type'),
                         properties=instance_data.get('properties', {}),
-                        status=instance_data.get('status', 'active'),
                         created_at=self._parse_datetime(instance_data.get('created_at')),
                         updated_at=self._parse_datetime(instance_data.get('updated_at'))
                     )
@@ -599,13 +657,13 @@ class InstanceRepository(IInstanceRepository):
         if not instance.entity_type:
             raise ValidationError("实体类型不能为空")
         
-        if not instance.status:
+        if not instance.properties.get('status'):
             raise ValidationError("实例状态不能为空")
         
         # 验证状态值
         valid_statuses = ['active', 'inactive', 'deleted', 'suspended']
-        if instance.status not in valid_statuses:
-            raise ValidationError(f"无效的实例状态: {instance.status}")
+        if instance.properties.get('status') not in valid_statuses:
+            raise ValidationError(f"无效的实例状态: {instance.properties.get('status')}")
     
     def _parse_datetime(self, datetime_str: Optional[str]) -> Optional[datetime]:
         """解析日期时间字符串"""

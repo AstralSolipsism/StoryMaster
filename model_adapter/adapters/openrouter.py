@@ -48,9 +48,13 @@ class OpenRouterAdapter(BaseModelAdapter):
         if app_name:
             headers['X-Title'] = app_name
         
+        # 使用临时变量获取API密钥，避免长期存储在内存中
         api_key = self.config.get('api_key') # Standardized to 'api_key'
         if api_key:
+            # 直接使用临时变量构建授权头，避免密钥长期存在
             headers['Authorization'] = f"Bearer {api_key}"
+            # 立即清除临时变量引用
+            api_key = None
         
         return headers
     

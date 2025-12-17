@@ -343,12 +343,14 @@ class InstantiationManager(IInstantiationManager):
             query_parts.append("RETURN i")
             
             if limit:
-                query_parts.append(f"LIMIT {limit}")
+                query_parts.append("LIMIT $limit")
             
             query = " ".join(query_parts)
             
             # 准备参数
             params = {"template_id": template_id, **(filters or {})}
+            if limit:
+                params["limit"] = limit
             
             # 执行查询
             result = await self._storage.query(query, params)
@@ -359,10 +361,11 @@ class InstantiationManager(IInstantiationManager):
                 if instance_data:
                     instance = EntityInstance(
                         id=instance_data.get('id'),
+                        instance_id=instance_data.get('id'),
                         template_id=instance_data.get('template_id'),
+                        template_type=instance_data.get('entity_type'),
                         entity_type=instance_data.get('entity_type'),
                         properties=instance_data.get('properties', {}),
-                        status=instance_data.get('status', 'active'),
                         created_at=instance_data.get('created_at'),
                         updated_at=instance_data.get('updated_at')
                     )
@@ -643,10 +646,11 @@ class InstantiationManager(IInstantiationManager):
                 if instance_data:
                     instance = EntityInstance(
                         id=instance_data.get('id'),
+                        instance_id=instance_data.get('id'),
                         template_id=instance_data.get('template_id'),
+                        template_type=instance_data.get('entity_type'),
                         entity_type=instance_data.get('entity_type'),
                         properties=instance_data.get('properties', {}),
-                        status=instance_data.get('status', 'active'),
                         created_at=instance_data.get('created_at'),
                         updated_at=instance_data.get('updated_at')
                     )

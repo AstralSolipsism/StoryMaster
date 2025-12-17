@@ -281,21 +281,24 @@ class FileSystemAdapter(IFileStorage):
     def _get_full_path(self, file_path: str) -> Path:
         """获取完整路径，防止路径遍历攻击"""
         try:
+            # 将file_path视为相对于base_path的路径，防止绝对路径绕过
+            # 不使用resolve()，避免将相对路径转换为绝对路径
+            relative_path = Path(file_path)
+            
+            # 构建完整路径
+            full_path = self.base_path / relative_path
+            
             # 规范化路径，解析任何..或.组件
-            normalized_path = Path(file_path).resolve()
+            normalized_path = full_path.resolve()
             
             # 检查解析后的路径是否在base_path范围内
             base_path = self.base_path.resolve()
             try:
-                # 使用commonpath检查路径是否在允许范围内
-                common_path = Path(os.path.commonpath([str(base_path), str(normalized_path)]))
-                if str(common_path).startswith(str(base_path)):
-                    # 确保最终路径在base_path下
-                    final_path = base_path / normalized_path.relative_to(base_path)
-                    return final_path.resolve()
-                else:
-                    self.logger.warning(f"检测到路径遍历攻击: {file_path}")
-                    raise ValueError(f"不安全的路径: {file_path}")
+                # 使用relative_to检查路径是否在base_path下
+                relative_to_base = normalized_path.relative_to(base_path)
+                # 确保最终路径在base_path下
+                final_path = base_path / relative_to_base
+                return final_path.resolve()
             except ValueError:
                 # relative_to失败，说明路径不在base_path下
                 self.logger.warning(f"检测到路径遍历攻击: {file_path}")

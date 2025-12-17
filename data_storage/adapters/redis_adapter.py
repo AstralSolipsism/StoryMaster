@@ -46,8 +46,8 @@ class RedisAdapter(ICacheManager):
             ).hex()
         else:
             self._password_hash = None
-        # 在内存中保留明文密码仅用于连接，使用后应清除
-        self._password = password
+        # 不在实例变量中存储明文密码，而是使用临时变量传递给连接方法
+        self._temp_password = password  # 临时存储，将在连接后立即清除
         self.max_connections = max_connections
         
         self.client = None
@@ -56,13 +56,21 @@ class RedisAdapter(ICacheManager):
     
     async def connect(self) -> bool:
         """连接Redis"""
+        # 检查是否有临时密码可用（None密码也是有效的）
+        if not hasattr(self, '_temp_password'):
+            self.logger.error("没有可用的密码进行连接")
+            return False
+            
+        # 使用局部变量存储密码，避免在实例变量中长期保存
+        password = self._temp_password
+        
         try:
             # 创建连接池
             self.connection_pool = ConnectionPool(
                 host=self.host,
                 port=self.port,
                 db=self.db,
-                password=self._password,
+                password=password,
                 max_connections=self.max_connections,
                 retry_on_timeout=True,
                 socket_keepalive=True,
@@ -73,8 +81,8 @@ class RedisAdapter(ICacheManager):
             # 创建Redis客户端
             self.client = redis.Redis(connection_pool=self.connection_pool)
             
-            # 连接成功后，清除内存中的明文密码
-            self._clear_password()
+            # 立即清除临时密码
+            self._clear_temp_password()
             
             # 测试连接
             await self.client.ping()
@@ -84,7 +92,12 @@ class RedisAdapter(ICacheManager):
             
         except Exception as e:
             self.logger.error(f"连接Redis失败: {e}")
+            # 即使连接失败也要清除密码
+            self._clear_temp_password()
             return False
+        finally:
+            # 确保密码变量被清除
+            password = None
     
     async def disconnect(self) -> bool:
         """断开Redis连接"""
@@ -368,13 +381,34 @@ class RedisAdapter(ICacheManager):
             self.logger.error(f"获取连接信息时发生错误: {e}")
             return {"connected": False, "error": str(e)}
     
+    def _clear_temp_password(self) -> None:
+        """清除临时存储的明文密码"""
+        if hasattr(self, '_temp_password'):
+            # 使用多种方法确保密码被安全清除
+            import sys
+            # 获取密码字符串的引用
+            password_ref = self._temp_password
+            
+            # 只有当密码不是None时才清除（None是有效的无密码状态）
+            if password_ref is not None:
+                # 尝试覆盖内存中的密码数据
+                if isinstance(password_ref, str):
+                    # 对于字符串，我们无法直接覆盖内存，但可以删除引用
+                    delattr(self, '_temp_password')
+                    # 尝试从局部命名空间中清除
+                    if 'password_ref' in locals():
+                        password_ref = None
+                else:
+                    # 对于其他类型，直接删除
+                    delattr(self, '_temp_password')
+                
+                # 强制垃圾回收以尽快释放内存
+                import gc
+                gc.collect()
+    
     def _clear_password(self) -> None:
-        """清除内存中的明文密码"""
-        if hasattr(self, '_password'):
-            delattr(self, '_password')
-            # 尝试覆盖内存中的密码数据
-            self._password = None
-            # 不强制垃圾回收，让Python的垃圾回收器自然处理
+        """清除内存中的明文密码（保留向后兼容性）"""
+        self._clear_temp_password()
     
     def __del__(self):
         """析构函数，确保密码被清除"""

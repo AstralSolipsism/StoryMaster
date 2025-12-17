@@ -88,11 +88,11 @@ class AnthropicAdapter(BaseModelAdapter):
                 context_window = 200000
             
             models.append(ModelInfo(
-                id=model_data['id'],
-                name=model_data['name'],
-                max_tokens=model_data['max_tokens'],
+                id=model_data.get('id', ''),
+                name=model_data.get('name', model_data.get('id', '')),
+                max_tokens=model_data.get('max_tokens', self.DEFAULT_MAX_TOKENS),
                 context_window=context_window,
-                capabilities=ModelCapabilities(**model_data['capabilities']),
+                capabilities=ModelCapabilities(**model_data.get('capabilities', {})),
                 pricing=pricing,
                 tiers=[ServiceTier(**tier) for tier in tiers]
             ))
