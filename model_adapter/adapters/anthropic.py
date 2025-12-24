@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import time
 from typing import AsyncIterable, Dict, Any, List, Optional
 from urllib.parse import urlparse
@@ -56,7 +57,15 @@ class AnthropicAdapter(BaseModelAdapter):
     
     async def _fetch_models(self) -> List[ModelInfo]:
         """从JSON文件加载Anthropic模型列表"""
-        models_file = self.config.get('anthropic_models_file', 'model_adapter/adapters/anthropic_models.json')
+        # 获取配置中的文件路径，如果没有配置则使用相对于当前模块的默认路径
+        config_models_file = self.config.get('anthropic_models_file')
+        if config_models_file:
+            models_file = config_models_file
+        else:
+            # 使用相对于当前模块的路径构建绝对路径
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            models_file = os.path.join(current_dir, 'anthropic_models.json')
+        
         try:
             with open(models_file, 'r', encoding='utf-8') as f:
                 models_config = json.load(f)

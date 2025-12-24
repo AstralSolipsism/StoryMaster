@@ -53,11 +53,15 @@ class OllamaAdapter(BaseModelAdapter):
             details_list = await asyncio.gather(*tasks)
 
             for model_data, details in zip(response.get('models', []), details_list):
+                # 安全地提取和转换parameter_size为数字
+                parameter_size = details.get('details', {}).get('parameter_size', self.DEFAULT_CONTEXT_WINDOW)
+                context_window = self._parse_parameter_size(parameter_size)
+                
                 models.append(ModelInfo(
                     id=model_data.get('name'),
                     name=model_data.get('name'),
                     max_tokens=self.DEFAULT_MAX_TOKENS,
-                    context_window=details.get('details', {}).get('parameter_size', self.DEFAULT_CONTEXT_WINDOW),
+                    context_window=context_window,
                     capabilities=ModelCapabilities(
                         supports_images='clip' in str(details.get('details', {}).get('families')),
                         supports_prompt_cache=False,
@@ -168,6 +172,51 @@ class OllamaAdapter(BaseModelAdapter):
     
     def _is_anthropic_style(self) -> bool:
         return False
+    
+    def _parse_parameter_size(self, parameter_size) -> int:
+        """
+        解析parameter_size字段，将其转换为数字类型的context_window
+        
+        Args:
+            parameter_size: 可能是数字、字符串（如'7B'、'13B'）或其他类型
+            
+        Returns:
+            int: 转换后的context_window大小
+        """
+        # 如果已经是数字类型，直接返回
+        if isinstance(parameter_size, (int, float)):
+            return int(parameter_size)
+        
+        # 如果是字符串，尝试解析
+        if isinstance(parameter_size, str):
+            # 移除常见的后缀（如B、K、M等）
+            import re
+            # 匹配数字部分，可能包含小数点
+            match = re.search(r'(\d+\.?\d*)', parameter_size.strip().upper())
+            if match:
+                number_str = match.group(1)
+                try:
+                    number = float(number_str)
+                    # 根据后缀进行转换
+                    if 'B' in parameter_size.upper():
+                        # 如果是B（billion）后缀，转换为适当的大小的context window
+                        # 通常参数数量与context window成正比，但不是直接映射
+                        # 使用启发式规则：每B参数大约对应4K-8K context window
+                        return int(number * 6000)  # 平均每B参数对应6K context window
+                    elif 'M' in parameter_size.upper():
+                        # M（million）后缀
+                        return int(number * 6)  # 每M参数对应6 context window
+                    elif 'K' in parameter_size.upper():
+                        # K（thousand）后缀
+                        return max(int(number / 1000 * 6000), 1024)  # 最小1024
+                    else:
+                        # 没有后缀，直接使用数字
+                        return int(number)
+                except ValueError:
+                    pass
+        
+        # 如果无法解析，返回默认值
+        return self.DEFAULT_CONTEXT_WINDOW
     
     def _should_use_reasoning_budget(self, model: ModelInfo, config: Optional[ProviderConfig] = None) -> bool:
         return False  # Ollama does not support reasoning budget

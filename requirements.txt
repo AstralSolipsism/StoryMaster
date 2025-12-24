@@ -1,0 +1,54 @@
+# Web框架
+fastapi>=0.104.1
+uvicorn[standard]>=0.24.0
+
+# 数据验证和序列化
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# 数据库驱动
+neo4j>=5.14.1
+redis>=5.0.1
+
+# 认证和安全
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+python-multipart>=0.0.6
+
+# HTTP客户端
+httpx>=0.25.2
+aiohttp>=3.9.1
+
+# 工具库
+python-dotenv>=1.0.0
+click>=8.1.7
+
+# 日志库
+structlog>=23.2.0
+python-json-logger>=2.0.7
+psutil>=5.9.6
+
+# 开发依赖
+pytest>=7.4.3
+pytest-asyncio>=0.21.1
+pytest-cov>=4.1.0
+black>=23.11.0
+flake8>=6.1.0
+mypy>=1.7.1
+pre-commit>=3.6.0
+
+# 文档生成
+mkdocs>=1.5.3
+mkdocs-material>=9.4.8
+
+# 监控和日志
+structlog>=23.2.0
+
+# WebSocket支持
+websockets>=12.0
+
+# 任务队列（可选，用于异步任务）
+celery>=5.3.4
+
+# 现有模块依赖
+# 这些可能需要根据实际情况调整
