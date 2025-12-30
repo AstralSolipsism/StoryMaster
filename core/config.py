@@ -8,8 +8,8 @@
 import os
 from typing import List, Optional
 
-from pydantic import validator
-from pydantic_settings import BaseSettings
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -43,7 +43,8 @@ class Settings(BaseSettings):
     # JWT令牌过期时间（分钟）
     access_token_expire_minutes: int = 30
     
-    @validator("environment")
+    @field_validator("environment")
+    @classmethod
     def validate_environment(cls, v):
         """验证环境配置值"""
         allowed = ["development", "testing", "production"]
@@ -91,7 +92,8 @@ class Settings(BaseSettings):
     # 最大文件上传大小（MB）
     max_upload_size: int = 10
     
-    @validator("upload_dir")
+    @field_validator("upload_dir")
+    @classmethod
     def validate_upload_dir(cls, v):
         """确保上传目录存在"""
         os.makedirs(v, exist_ok=True)
@@ -113,7 +115,8 @@ class Settings(BaseSettings):
     # 日志文件备份数量
     log_file_backup_count: int = 5
     
-    @validator("log_level")
+    @field_validator("log_level")
+    @classmethod
     def validate_log_level(cls, v):
         """验证日志级别"""
         allowed = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
@@ -125,25 +128,21 @@ class Settings(BaseSettings):
     # 安全配置
     # ===========================================
     
-    # CORS允许的源
-    cors_origins: List[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+    # CORS允许的源 - 使用str类型，通过field_validator解析
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     
-    # 允许的主机
-    allowed_hosts: List[str] = ["localhost", "127.0.0.1"]
+    # 允许的主机 - 使用str类型，通过field_validator解析
+    allowed_hosts: str = "localhost,127.0.0.1"
     
-    @validator("cors_origins", pre=True)
-    def parse_cors_origins(cls, v):
-        """解析CORS源列表（支持逗号分隔的字符串）"""
-        if isinstance(v, str):
-            return [origin.strip() for origin in v.split(",")]
-        return v
+    @property
+    def cors_origins_list(self) -> List[str]:
+        """获取CORS源列表"""
+        return [origin.strip() for origin in self.cors_origins.split(",")]
     
-    @validator("allowed_hosts", pre=True)
-    def parse_allowed_hosts(cls, v):
-        """解析允许主机列表（支持逗号分隔的字符串）"""
-        if isinstance(v, str):
-            return [host.strip() for host in v.split(",")]
-        return v
+    @property
+    def allowed_hosts_list(self) -> List[str]:
+        """获取允许主机列表"""
+        return [host.strip() for host in self.allowed_hosts.split(",")]
     
     # ===========================================
     # WebSocket配置
@@ -162,11 +161,12 @@ class Settings(BaseSettings):
     # 前端应用URL
     frontend_url: str = "http://localhost:5173"
     
-    class Config:
-        """Pydantic配置"""
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False  # 环境变量不区分大小写
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,  # 环境变量不区分大小写
+        extra="ignore"  # 忽略额外的环境变量
+    )
         
     @property
     def is_development(self) -> bool:

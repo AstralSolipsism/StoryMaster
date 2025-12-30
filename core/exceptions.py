@@ -14,7 +14,8 @@ from typing import Any, Dict, Optional
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError, HTTPException
-from pydantic import ValidationError
+from pydantic import ValidationError as PydanticValidationError
+import pydantic
 
 from .logging import app_logger
 
@@ -39,7 +40,7 @@ class StoryMasterException(Exception):
         super().__init__(self.message)
 
 
-class ValidationError(StoryMasterException):
+class StoryMasterValidationError(StoryMasterException):
     """数据验证错误"""
     def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
         super().__init__(
@@ -283,10 +284,10 @@ def setup_exception_handlers(app: FastAPI) -> None:
             content=error_response.dict()
         )
     
-    @app.exception_handler(Pydantic.ValidationError)
+    @app.exception_handler(PydanticValidationError)
     async def pydantic_validation_exception_handler(
-        request: Request, 
-        exc: ValidationError
+        request: Request,
+        exc: PydanticValidationError
     ) -> JSONResponse:
         """处理Pydantic验证错误"""
         request_id = getattr(request.state, "request_id", None)
@@ -356,7 +357,7 @@ def setup_exception_handlers(app: FastAPI) -> None:
 # 导出异常类和函数
 __all__ = [
     "StoryMasterException",
-    "ValidationError",
+    "StoryMasterValidationError",
     "AuthenticationError",
     "AuthorizationError",
     "NotFoundError",

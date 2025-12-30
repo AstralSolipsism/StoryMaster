@@ -41,7 +41,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     - 关闭时清理资源
     """
     # 启动时的初始化工作
-    app_logger.info("🚀 StoryMaster API 正在启动...")
+    app_logger.info("StoryMaster API 正在启动...")
     
     try:
         # 设置日志系统
@@ -61,17 +61,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # 初始化模型适配器
         # await setup_model_adapter()
         
-        app_logger.info("✅ StoryMaster API 启动完成")
+        app_logger.info("StoryMaster API 启动完成")
         
         yield
         
     except Exception as e:
-        app_logger.error(f"❌ StoryMaster API 启动失败: {e}", exc_info=True)
+        app_logger.error(f"StoryMaster API 启动失败: {e}", exc_info=True)
         raise
     
     finally:
         # 关闭时的清理工作
-        app_logger.info("🔄 StoryMaster API 正在关闭...")
+        app_logger.info("StoryMaster API 正在关闭...")
         
         try:
             # 清理数据库连接
@@ -81,7 +81,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             # 清理AI模型资源
             # await cleanup_model_adapter()
             
-            app_logger.info("✅ StoryMaster API 已安全关闭")
+            app_logger.info("StoryMaster API 已安全关闭")
         except Exception as e:
             app_logger.error(f"关闭应用时出错: {e}", exc_info=True)
 
@@ -107,7 +107,7 @@ def create_application() -> FastAPI:
     # 配置CORS中间件
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.cors_origins,  # 从配置文件读取
+        allow_origins=settings.cors_origins_list,  # 从配置文件读取
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
         allow_headers=["*"],
@@ -118,7 +118,7 @@ def create_application() -> FastAPI:
     if settings.is_production:
         app.add_middleware(
             TrustedHostMiddleware,
-            allowed_hosts=settings.allowed_hosts
+            allowed_hosts=settings.allowed_hosts_list
         )
     
     # 设置异常处理器

@@ -16,6 +16,12 @@ from typing import List, Optional
 
 import uvicorn
 
+# 修复Windows控制台编码问题
+if sys.platform.startswith('win'):
+    import codecs
+    sys.stdout = codecs.getwriter('utf-8')(sys.stdout.detach())
+    sys.stderr = codecs.getwriter('utf-8')(sys.stderr.detach())
+
 
 def check_python_version() -> bool:
     """

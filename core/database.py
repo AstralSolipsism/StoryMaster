@@ -38,19 +38,33 @@ class DatabaseManager:
         if self._is_initialized:
             return
         
+        # 在开发环境中允许数据库连接失败，仅记录警告
+        neo4j_success = False
+        redis_success = False
+        
+        # 尝试初始化Neo4j连接
         try:
-            # 初始化Neo4j连接
             await self._init_neo4j()
-            
-            # 初始化Redis连接
-            await self._init_redis()
-            
-            self._is_initialized = True
-            print("✅ 数据库连接初始化成功")
-            
+            neo4j_success = True
+            print("SUCCESS: Neo4j连接初始化成功")
         except Exception as e:
-            print(f"❌ 数据库连接初始化失败: {e}")
-            raise ConnectionError(f"数据库连接初始化失败: {e}")
+            print(f"WARNING: Neo4j连接失败，应用将在无Neo4j模式下运行: {e}")
+            self._neo4j_driver = None
+       
+        # 尝试初始化Redis连接
+        try:
+            await self._init_redis()
+            redis_success = True
+            print("SUCCESS: Redis连接初始化成功")
+        except Exception as e:
+            print(f"⚠️  Redis连接失败，应用将在无Redis模式下运行: {e}")
+            self._redis_client = None
+       
+        self._is_initialized = True
+        if neo4j_success and redis_success:
+            print("SUCCESS: 数据库连接初始化成功")
+        else:
+            print("WARNING: 部分数据库连接失败，应用以降级模式启动")
     
     async def _init_neo4j(self) -> None:
         """初始化Neo4j连接"""
@@ -178,19 +192,19 @@ class DatabaseManager:
         """关闭所有数据库连接"""
         try:
             if self._neo4j_driver:
-                self._neo4j_driver.close()
+                await self._neo4j_driver.close()
                 self._neo4j_driver = None
-            
+           
             if self._redis_client:
                 # Redis客户端没有异步close方法，使用同步方式
                 self._redis_client.close()
                 self._redis_client = None
-            
+           
             self._is_initialized = False
             print("✅ 数据库连接已关闭")
-            
+           
         except Exception as e:
-            print(f"❌ 关闭数据库连接时出错: {e}")
+            print(f"ERROR: 关闭数据库连接时出错: {e}")
 
 
 # 创建全局数据库管理器实例

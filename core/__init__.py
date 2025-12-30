@@ -11,7 +11,7 @@ from .config import settings
 from .logging import setup_logging, get_logger, app_logger, db_logger, api_logger
 from .exceptions import (
     StoryMasterException,
-    ValidationError,
+    StoryMasterValidationError,
     AuthenticationError,
     AuthorizationError,
     NotFoundError,
@@ -33,7 +33,7 @@ __all__ = [
     "db_logger",
     "api_logger",
     "StoryMasterException",
-    "ValidationError",
+    "StoryMasterValidationError",
     "AuthenticationError",
     "AuthorizationError",
     "NotFoundError",
