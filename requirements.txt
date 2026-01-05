@@ -50,5 +50,9 @@ websockets>=12.0
 # 任务队列（可选，用于异步任务）
 celery>=5.3.4
 
-# 现有模块依赖
-# 这些可能需要根据实际情况调整
+# 文件处理依赖
+PyPDF2>=3.0.1
+pdfplumber>=0.9.0
+python-docx>=0.8.11
+markdown>=3.5.1
+python-magic>=0.4.27

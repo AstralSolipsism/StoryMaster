@@ -92,6 +92,25 @@ class Settings(BaseSettings):
     # 最大文件上传大小（MB）
     max_upload_size: int = 10
     
+    # ===========================================
+    # 规则书解析配置
+    # ===========================================
+    
+    # 支持的规则书文件格式
+    supported_rulebook_formats: List[str] = ["pdf", "docx", "txt", "json", "md"]
+    
+    # 最大规则书文件大小（MB）
+    max_rulebook_file_size: int = 50
+    
+    # 默认解析模型
+    default_parser_model: str = "gpt-4"
+    
+    # 解析任务超时时间（秒）
+    parsing_task_timeout: int = 1800
+    
+    # 最大并发解析任务数
+    max_concurrent_parsing_tasks: int = 3
+    
     @field_validator("upload_dir")
     @classmethod
     def validate_upload_dir(cls, v):
