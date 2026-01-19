@@ -10,6 +10,7 @@ from fastapi import APIRouter
 # 导入各个功能模块的路由
 from .health import router as health_router
 from .rulebooks import router as rulebooks_router
+from .dm import router as dm_router
 # from .auth import router as auth_router
 # from .characters import router as characters_router
 # from .sessions import router as sessions_router
@@ -21,6 +22,7 @@ api_router = APIRouter(prefix="/api/v1", tags=["v1"])
 # 注册各个模块的路由
 api_router.include_router(health_router, tags=["health"])
 api_router.include_router(rulebooks_router, tags=["rulebooks"])
+api_router.include_router(dm_router, tags=["dungeon-master"])
 # api_router.include_router(auth_router, prefix="/auth", tags=["authentication"])
 # api_router.include_router(characters_router, prefix="/characters", tags=["characters"])
 # api_router.include_router(sessions_router, prefix="/sessions", tags=["game sessions"])

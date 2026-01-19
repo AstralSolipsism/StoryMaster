@@ -9,8 +9,11 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime
 
 from ..interfaces import ITool, ToolSchema, ToolParameter, ToolResult
-from ...core.logging import app_logger
-from ...core.exceptions import StoryMasterValidationError
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from core.logging import app_logger
+from core.exceptions import StoryMasterValidationError
 
 
 class RulebookParserTool(ITool):

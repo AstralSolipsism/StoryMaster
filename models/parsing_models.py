@@ -4,7 +4,7 @@
 
 from typing import Optional, Dict, Any, List
 from datetime import datetime
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class RulebookUploadRequest(BaseModel):
@@ -15,7 +15,8 @@ class RulebookUploadRequest(BaseModel):
     parsing_options: Dict[str, Any] = Field(default_factory=dict, description="解析选项")
     user_id: str = Field(..., description="用户ID")
     
-    @validator('file_type')
+    @field_validator('file_type')
+    @classmethod
     def validate_file_type(cls, v):
         allowed_types = ['pdf', 'docx', 'txt', 'json', 'md']
         if v.lower() not in allowed_types:

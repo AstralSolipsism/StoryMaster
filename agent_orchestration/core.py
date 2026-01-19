@@ -32,7 +32,7 @@ class BaseAgent(IAgent):
                  agent_id: str,
                  config: Optional[AgentConfig] = None,
                  model_scheduler: Optional[ModelScheduler] = None,
-                 tool_manager: Optional[IToolManager] = None,
+                 tool_manager: Optional[ToolManager] = None,
                  reasoning_engine_factory: Optional[IReasoningEngineFactory] = None,
                  execution_engine: Optional[IExecutionEngine] = None,
                  config_manager: Optional[IConfigurationManager] = None,
@@ -73,7 +73,7 @@ class BaseAgent(IAgent):
         self.reasoning_engine: Optional[IReasoningEngine] = None
     
     def _init_react_executor(self, model_scheduler: Optional[ModelScheduler],
-                           tool_manager: Optional[IToolManager]) -> None:
+                           tool_manager: Optional[ToolManager]) -> None:
         """初始化ReAct执行器"""
         self.react_executor = None
         if model_scheduler and tool_manager:
