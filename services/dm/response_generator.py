@@ -16,7 +16,7 @@ from ...models.dm_models import (
     NPCResponse,
     CustomDMStyleRequest
 )
-from ...model_adapter import ModelScheduler, RequestContext, ChatMessage
+from ...provider import ProviderManager, ProviderRequest, ChatMessage
 from ...core.logging import app_logger
 
 
@@ -69,7 +69,7 @@ class ResponseGenerator:
     
     def __init__(
         self,
-        model_scheduler: ModelScheduler,
+        model_scheduler: ProviderManager,
         dm_style: DMStyle = DMStyle.BALANCED,
         narrative_tone: NarrativeTone = NarrativeTone.DESCRIPTIVE,
         combat_detail: CombatDetail = CombatDetail.NORMAL,
@@ -176,7 +176,7 @@ class ResponseGenerator:
             temperature = self.get_effective_temperature()
             
             # 调用LLM生成响应
-            request_context = RequestContext(
+            request_context = ProviderRequest(
                 messages=[
                     ChatMessage(
                         role='system',
@@ -380,7 +380,7 @@ class ResponseGenerator:
 # ==================== 工厂函数 ====================
 
 def create_response_generator(
-    model_scheduler: ModelScheduler,
+    model_scheduler: ProviderManager,
     dm_style: DMStyle = DMStyle.BALANCED,
     narrative_tone: NarrativeTone = NarrativeTone.DESCRIPTIVE,
     combat_detail: CombatDetail = CombatDetail.NORMAL
@@ -406,7 +406,7 @@ def create_response_generator(
 
 
 def create_custom_response_generator(
-    model_scheduler: ModelScheduler,
+    model_scheduler: ProviderManager,
     custom_style_request: CustomDMStyleRequest
 ) -> ResponseGenerator:
     """

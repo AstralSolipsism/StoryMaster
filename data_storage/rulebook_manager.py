@@ -14,7 +14,7 @@ from datetime import datetime
 from abc import ABC, abstractmethod
 
 from ..core.schema_manager import SchemaManager, RulebookSchema
-from ..core.exceptions import ValidationError, DataStorageError
+from ..data_storage.interfaces import ValidationError, DataStorageError
 
 logger = logging.getLogger(__name__)
 

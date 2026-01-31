@@ -6,6 +6,7 @@
 """
 
 import os
+from pathlib import Path
 from typing import List, Optional
 
 from pydantic import field_validator
@@ -73,6 +74,18 @@ class Settings(BaseSettings):
     openai_api_key: Optional[str] = None
     openai_base_url: str = "https://api.openai.com/v1"
     
+    # OpenAI Compatible配置
+    openai_compatible_api_key: Optional[str] = None
+    openai_compatible_base_url: Optional[str] = None
+    
+    # Groq配置 (OpenAI Compatible)
+    groq_api_key: Optional[str] = None
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+    
+    # Zhipu配置 (OpenAI Compatible)
+    zhipu_api_key: Optional[str] = None
+    zhipu_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
+    
     # Anthropic配置
     anthropic_api_key: Optional[str] = None
     
@@ -126,7 +139,13 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     
     # 日志文件路径
-    log_file: str = "./logs/app.log"
+    log_file: str = str(Path(__file__).resolve().parents[1] / "logs" / "app.log")
+    
+    # 异常告警日志文件路径
+    log_alert_file: str = str(Path(__file__).resolve().parents[1] / "logs" / "alerts.log")
+    
+    # 大模型请求日志文件路径
+    log_llm_file: str = str(Path(__file__).resolve().parents[1] / "logs" / "llm.log")
     
     # 日志文件最大大小（MB）
     log_file_max_size: int = 10
@@ -181,7 +200,7 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:5173"
     
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(Path(__file__).resolve().parent.parent / ".env"),
         env_file_encoding="utf-8",
         case_sensitive=False,  # 环境变量不区分大小写
         extra="ignore"  # 忽略额外的环境变量

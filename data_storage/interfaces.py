@@ -413,6 +413,67 @@ class DataStorageConfig:
     backup_interval: int = 3600  # 秒
 
 
+# ==================== 记忆存储接口 ====================
+
+class IMemoryRepository(ABC):
+    """记忆仓库接口（场景记忆、历史记忆、NPC记忆）"""
+    
+    @abstractmethod
+    async def save_scene_memory(self, memory: 'SceneMemory') -> bool:
+        """保存场景记忆"""
+        pass
+    
+    @abstractmethod
+    async def get_scene_memories(self, session_id: str, scene_id: Optional[str] = None,
+                                limit: int = 100) -> List['SceneMemory']:
+        """获取场景记忆"""
+        pass
+    
+    @abstractmethod
+    async def get_scene_memory_by_id(self, memory_id: str) -> Optional['SceneMemory']:
+        """根据ID获取场景记忆"""
+        pass
+    
+    @abstractmethod
+    async def save_history_memory(self, memory: 'HistoryMemory') -> bool:
+        """保存历史记忆"""
+        pass
+    
+    @abstractmethod
+    async def get_history_memories(self, session_id: str, start_time: Optional[datetime] = None,
+                                  end_time: Optional[datetime] = None, limit: int = 100) -> List['HistoryMemory']:
+        """获取历史记忆"""
+        pass
+    
+    @abstractmethod
+    async def get_history_memory_by_id(self, memory_id: str) -> Optional['HistoryMemory']:
+        """根据ID获取历史记忆"""
+        pass
+    
+    @abstractmethod
+    async def save_npc_memory(self, memory: 'NPCMemoryRecord') -> bool:
+        """保存NPC记忆"""
+        pass
+    
+    @abstractmethod
+    async def get_npc_memories(self, npc_id: str, session_id: Optional[str] = None,
+                             limit: int = 100) -> List['NPCMemoryRecord']:
+        """获取NPC记忆"""
+        pass
+    
+    @abstractmethod
+    async def get_npc_memory_by_id(self, record_id: str) -> Optional['NPCMemoryRecord']:
+        """根据ID获取NPC记忆"""
+        pass
+    
+    @abstractmethod
+    async def search_memories(self, query: 'MemorySearchQuery') -> List['MemorySearchResult']:
+        """搜索记忆"""
+        pass
+
+
+# ==================== 配置接口 ====================
+
 class IDataStorageConfig(ABC):
     """数据存储配置管理接口"""
     

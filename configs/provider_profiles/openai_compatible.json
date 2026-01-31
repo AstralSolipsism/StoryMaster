@@ -1,0 +1,8 @@
+{
+  "profile_id": "openai_compatible",
+  "name": "GLM-4.7",
+  "provider_type": "openai_compatible_chat_completion",
+  "api_key": "sk-WhsRmtlY2Uy3YDsTBayRtXuv4gpFliPeexCQhy2LXRMTCrs8",
+  "base_url": "https://key.outlune.com/v1",
+  "model": "glm-4.7"
+}

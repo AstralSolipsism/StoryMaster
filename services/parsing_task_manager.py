@@ -22,9 +22,9 @@ from ..models.parsing_models import (
 from ..services.file_processor import FileProcessor
 from ..services.schema_converter import SchemaConverter
 from ..services.integrations.rulebook_parser_integration import RulebookParserIntegration
-from ..agent_orchestration.core import create_agent, create_orchestrator
-from ..agent_orchestration.interfaces import ExecutionContext, AgentConfig, ReasoningMode
-from ..model_adapter.scheduler import ModelScheduler
+from ..agent.core import create_agent, create_orchestrator
+from ..agent.interfaces import ExecutionContext, AgentConfig, ReasoningMode
+from ..provider import ProviderManager, ProviderRequest, create_provider_manager
 from ..data_storage.rulebook_manager import RulebookManager
 
 
@@ -44,6 +44,8 @@ class ParsingTask:
         
         # 任务结果
         self.processed_file: Optional[ProcessedFile] = None
+        self.processed_files: List[ProcessedFile] = []
+        self.combined_metadata: Optional[Dict[str, Any]] = None
         self.parsing_result: Optional[Dict[str, Any]] = None
         self.converted_schema: Optional[Dict[str, Any]] = None
         self.errors: List[str] = []
@@ -87,7 +89,7 @@ class ParsingTask:
             parsing_errors=self.errors,
             validation_warnings=self.warnings,
             preview_sections=self._generate_preview(),
-            file_metadata=self.processed_file.metadata if self.processed_file else None
+            file_metadata=self._build_file_metadata()
         )
     
     def _generate_preview(self) -> List[Dict[str, Any]]:
@@ -120,6 +122,25 @@ class ParsingTask:
         
         return preview_sections
 
+    def _build_file_metadata(self) -> Optional[Dict[str, Any]]:
+        if self.processed_files:
+            return {
+                "file_count": len(self.processed_files),
+                "files": [
+                    {
+                        "file_name": processed.file_name,
+                        "file_type": processed.file_type,
+                        "file_size": processed.file_size,
+                        **processed.metadata,
+                    }
+                    for processed in self.processed_files
+                ],
+                "combined": self.combined_metadata or {},
+            }
+        if self.processed_file:
+            return self.processed_file.metadata
+        return None
+
 
 class ParsingTaskManager:
     """解析任务管理器"""
@@ -129,7 +150,7 @@ class ParsingTaskManager:
         file_processor: FileProcessor = None,
         schema_converter: SchemaConverter = None,
         rulebook_manager: RulebookManager = None,
-        model_scheduler: ModelScheduler = None
+        model_scheduler: ProviderManager = None
     ):
         self.file_processor = file_processor or FileProcessor()
         self.schema_converter = schema_converter or SchemaConverter()
@@ -142,6 +163,7 @@ class ParsingTaskManager:
         # 初始化智能体编排器
         self.orchestrator = None
         self.parser_agent = None
+        self.parser_model = None
         
         app_logger.info("解析任务管理器初始化完成")
     
@@ -170,12 +192,11 @@ class ParsingTaskManager:
             self.parser_agent = await create_agent(
                 agent_id="rulebook_parser",
                 config=agent_config,
-                model_scheduler=self.model_scheduler,
-                orchestrator=self.orchestrator
+                model_scheduler=self.model_scheduler
             )
             
             await self.orchestrator.register_agent(self.parser_agent)
-            
+
             app_logger.info("规则书解析智能体初始化完成")
     
     async def create_parsing_task(self, request_data: Dict[str, Any]) -> str:
@@ -183,7 +204,7 @@ class ParsingTaskManager:
         创建解析任务
         
         Args:
-            request_data: 请求数据，包含file_name, file_type, parser_model, user_id等
+            request_data: 请求数据，包含file_name(s), file_type(s), parser_model, user_id等
             
         Returns:
             str: 任务ID
@@ -194,7 +215,9 @@ class ParsingTaskManager:
         task = ParsingTask(task_id, request_data)
         self.active_tasks[task_id] = task
         
-        app_logger.info(f"创建解析任务: {task_id}, 文件: {request_data.get('file_name')}")
+        app_logger.info(
+            f"创建解析任务: {task_id}, 文件: {request_data.get('file_name') or request_data.get('file_names')}"
+        )
         
         return task_id
     
@@ -205,6 +228,16 @@ class ParsingTaskManager:
         Args:
             task_id: 任务ID
             file: 上传的文件
+        """
+        await self.process_parsing_task_multi(task_id, [file])
+
+    async def process_parsing_task_multi(self, task_id: str, files: List[UploadFile]) -> None:
+        """
+        处理多文件解析任务
+        
+        Args:
+            task_id: 任务ID
+            files: 上传的文件列表
         """
         if task_id not in self.active_tasks:
             app_logger.error(f"解析任务不存在: {task_id}")
@@ -219,27 +252,42 @@ class ParsingTaskManager:
             # 1. 文件处理阶段 (0%-20%)
             task.update_status("processing", 0.05, "开始处理文件", "文件处理")
             
-            # 读取文件内容
-            file_content = await file.read()
-            file_name = task.request_data['file_name']
-            file_type = task.request_data['file_type']
+            processed_files: List[ProcessedFile] = []
+            for upload_file in files:
+                if not upload_file.filename:
+                    raise StoryMasterValidationError("未提供文件名")
+                file_content = await upload_file.read()
+                file_name = upload_file.filename
+                file_type = file_name.rsplit('.', 1)[-1].lower() if '.' in file_name else ''
+                if not file_type:
+                    raise StoryMasterValidationError(f"无法识别文件类型: {file_name}")
+                processed_file = await self.file_processor.process_uploaded_file(
+                    file_content, file_name, file_type
+                )
+                processed_files.append(processed_file)
             
-            # 处理文件
-            processed_file = await self.file_processor.process_uploaded_file(
-                file_content, file_name, file_type
-            )
-            task.processed_file = processed_file
+            task.processed_files = processed_files
+            if len(processed_files) == 1:
+                task.processed_file = processed_files[0]
+
+            combined_content, combined_metadata = self._combine_processed_files(processed_files)
+            task.combined_metadata = combined_metadata
             
             task.update_status("processing", 0.2, "文件处理完成", "文件处理")
             
             # 2. 内容解析阶段 (20%-70%)
             task.update_status("processing", 0.2, "开始解析规则书内容", "内容解析")
-            
-            # 使用智能体解析内容
+
+            model_name = task.request_data.get("parser_model")
+            if not model_name:
+                raise StoryMasterValidationError("parser_model is required")
+            if self.parser_model != model_name:
+                self.parser_model = model_name
+
             parsing_result = await self._parse_with_agent(
-                task.processed_file.content,
-                task.request_data.get('parser_model', 'gpt-4'),
-                task.processed_file.metadata
+                combined_content,
+                self.parser_model,
+                combined_metadata
             )
             
             task.parsing_result = parsing_result
@@ -252,7 +300,7 @@ class ParsingTaskManager:
             # 转换为规则书Schema
             converted_schema = await self.schema_converter.convert_to_rulebook_schema(
                 parsing_result,
-                task.processed_file.metadata,
+                combined_metadata,
                 task.request_data['user_id']
             )
             
@@ -263,12 +311,9 @@ class ParsingTaskManager:
             # 4. 验证阶段 (90%-100%)
             task.update_status("processing", 0.9, "开始验证解析结果", "结果验证")
             
-            # 验证解析结果
-            validation_result = await self.schema_converter.validate_parsed_schema(converted_schema)
-            
+            validation_result = await self._validate_parsed_schema(converted_schema)
             if validation_result.get('errors'):
                 task.errors.extend(validation_result['errors'])
-            
             if validation_result.get('warnings'):
                 task.warnings.extend(validation_result['warnings'])
             
@@ -282,9 +327,52 @@ class ParsingTaskManager:
             task.errors.append(str(e))
             task.update_status("failed", task.progress, f"解析失败: {str(e)}", "失败")
     
+    def _combine_processed_files(self, processed_files: List[ProcessedFile]) -> (str, Dict[str, Any]):
+        file_summaries = []
+        content_parts = []
+        for processed in processed_files:
+            file_summaries.append(
+                {
+                    "file_name": processed.file_name,
+                    "file_type": processed.file_type,
+                    "file_size": processed.file_size,
+                    **processed.metadata,
+                }
+            )
+            content_parts.append(
+                f"=== 文件: {processed.file_name} ({processed.file_type}) ===\n{processed.content}"
+            )
+        combined_content = "\n\n".join(content_parts)
+        combined_metadata = {
+            "file_type": "multi",
+            "file_count": len(processed_files),
+            "files": file_summaries,
+            "content_length": len(combined_content),
+        }
+        return combined_content, combined_metadata
+
+    async def _validate_parsed_schema(self, schema_data: Dict[str, Any]) -> Dict[str, Any]:
+        errors = []
+        warnings = []
+        if not schema_data:
+            errors.append("解析结果为空")
+            return {"errors": errors, "warnings": warnings}
+        if isinstance(schema_data, dict) and "rulebook_schema" in schema_data:
+            schema = schema_data.get("rulebook_schema") or {}
+        else:
+            schema = schema_data
+        if not isinstance(schema, dict):
+            errors.append("解析结果格式错误")
+            return {"errors": errors, "warnings": warnings}
+        if not schema.get("entities"):
+            errors.append("规则书Schema缺少实体定义")
+        if "schema_id" not in schema:
+            warnings.append("规则书Schema缺少schema_id")
+        return {"errors": errors, "warnings": warnings}
+
     async def _parse_with_agent(
-        self, 
-        content: str, 
+        self,
+        content: str,
         model_name: str,
         metadata: Dict[str, Any]
     ) -> Dict[str, Any]:
@@ -328,33 +416,75 @@ class ParsingTaskManager:
 4. 提取游戏规则和计算公式
 5. 识别验证规则和约束条件
 
+输出格式（必须严格遵守）：
+- 返回 JSON 对象（不是数组）。
+- 必须包含键："rulebook_schema"。
+- rulebook_schema.entities 必须是“对象/字典”，不能是数组。
+- 如果没有任何实体，也必须输出空对象："entities": {{}}。
+
+JSON 结构示例（最小结构）：
+{{
+  "rulebook_schema": {{
+    "name": "<规则书名称>",
+    "description": "<简要描述>",
+    "entities": {{}},
+    "rules": {{}}
+  }}
+}}
+
 规则书内容：
 {content_preview}
 
-请严格按照要求的JSON格式输出解析结果，不要添加任何额外的解释或说明。只返回JSON数据。"""
+只返回JSON数据，不要添加任何额外的解释或说明。"""
         
         # 执行解析
-        result = await self.parser_agent.execute_task(task_prompt, context)
+        if not self.parser_model:
+            raise StoryMasterValidationError("parser_model is required")
+
+        llm_request = ProviderRequest(
+            messages=[
+                {"role": "system", "content": "You are a rulebook parsing expert."},
+                {"role": "user", "content": task_prompt},
+            ],
+            model=self.parser_model,
+        )
+
+        if self.model_scheduler:
+            app_logger.info(
+                "解析使用注入的provider_manager: providers=%s default=%s",
+                ",".join(sorted(self.model_scheduler.providers.keys())) if hasattr(self.model_scheduler, "providers") else "unknown",
+                getattr(self.model_scheduler.config, "default_provider", "unknown") if hasattr(self.model_scheduler, "config") else "unknown",
+            )
+            response = await self.model_scheduler.chat(llm_request)
+            if not response or not response.choices:
+                raise StoryMasterValidationError("模型响应为空")
+            result = response.choices[0].message.content or ""
+        else:
+            provider_manager = create_provider_manager()
+            await provider_manager.initialize()
+            app_logger.info(
+                "解析使用本地provider_manager: providers=%s default=%s",
+                ",".join(sorted(provider_manager.providers.keys())) or "none",
+                provider_manager.config.default_provider,
+            )
+            response = await provider_manager.chat(llm_request)
+            if not response or not response.choices:
+                raise StoryMasterValidationError("模型响应为空")
+            result = response.choices[0].message.content or ""
         
         # 尝试解析JSON结果
         try:
             if isinstance(result, str):
-                # 尝试从结果中提取JSON
-                json_match = re.search(r'```json\s*(.*?)\s*```', result, re.DOTALL)
-                if json_match:
-                    result = json_match.group(1)
-                elif result.strip().startswith('{'):
-                    result = result.strip()
-                else:
-                    # 尝试找到第一个 { 和最后一个 }
-                    start_idx = result.find('{')
-                    end_idx = result.rfind('}')
-                    if start_idx != -1 and end_idx != -1:
-                        result = result[start_idx:end_idx+1]
-                    else:
-                        raise ValueError("无法从解析结果中提取JSON")
-                
-                return json.loads(result)
+                result = self._extract_json_candidate(result)
+                if not result:
+                    raise ValueError("无法从解析结果中提取JSON")
+                try:
+                    return json.loads(result)
+                except json.JSONDecodeError:
+                    repaired = self._truncate_to_balanced_json(result)
+                    if repaired and repaired != result:
+                        return json.loads(repaired)
+                    raise
             elif isinstance(result, dict):
                 return result
             else:
@@ -364,6 +494,50 @@ class ParsingTaskManager:
             app_logger.error(f"解析结果JSON转换失败: {e}, 原始结果: {str(result)[:500]}")
             raise StoryMasterValidationError(f"解析结果格式错误: {str(e)}")
     
+    def _extract_json_candidate(self, result: str) -> Optional[str]:
+        json_match = re.search(r"```json\s*(.*?)\s*```", result, re.DOTALL)
+        if json_match:
+            return json_match.group(1).strip()
+        stripped = result.strip()
+        if stripped.startswith("{"):
+            return stripped
+        start_idx = stripped.find("{")
+        end_idx = stripped.rfind("}")
+        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+            return stripped[start_idx : end_idx + 1]
+        return None
+
+    def _truncate_to_balanced_json(self, text: str) -> Optional[str]:
+        in_string = False
+        escape = False
+        depth = 0
+        last_valid_index = None
+        for idx, ch in enumerate(text):
+            if in_string:
+                if escape:
+                    escape = False
+                    continue
+                if ch == "\\":
+                    escape = True
+                    continue
+                if ch == '"':
+                    in_string = False
+                continue
+            if ch == '"':
+                in_string = True
+                continue
+            if ch == "{":
+                depth += 1
+                continue
+            if ch == "}":
+                if depth > 0:
+                    depth -= 1
+                    if depth == 0:
+                        last_valid_index = idx
+        if last_valid_index is None:
+            return None
+        return text[: last_valid_index + 1]
+
     async def get_task_status(self, task_id: str) -> Optional[ParsingTaskStatus]:
         """获取任务状态"""
         task = self.active_tasks.get(task_id)

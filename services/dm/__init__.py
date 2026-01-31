@@ -4,6 +4,7 @@ DM服务模块
 """
 
 from .input_classifier import InputClassifier, create_input_classifier
+from .dm_agent import DMAgent, create_dm_agent
 from .entity_extractor import EntityExtractor, create_entity_extractor
 from .task_dispatcher import (
     TaskDispatcher,
@@ -15,7 +16,21 @@ from .task_dispatcher import (
     CommandProcessor,
     create_task_dispatcher
 )
-from .npc_agent import NPCAgent, NPCMemory, create_npc_agent
+from .npc_agent import NPCAgent, create_npc_agent
+from .npc_memory_system import (
+    EnhancedNPCMemory,
+    SemanticMemoryRetriever,
+    MemoryImportanceScorer,
+    MemorySummarizer,
+    MemoryScore
+)
+from .npc_emotion_system import (
+    EmotionType,
+    EmotionalState,
+    EmotionStateMachine,
+    BehaviorDecisionTree,
+    RelationshipManager
+)
 from .npc_pool import NPCAgentPool, create_npc_pool
 from .time_manager import (
     TimeManager,
@@ -32,6 +47,14 @@ from .response_generator import (
     ResponseGenerator,
     DMStylesConfig,
     create_response_generator
+)
+from .memory_managers import (
+    CacheKeyGenerator,
+    SceneMemoryManager,
+    HistoryMemoryManager,
+    NPCMemoryStorageService,
+    MemoryRetrievalService,
+    MemoryManagerFactory
 )
 
 __all__ = [
@@ -55,8 +78,21 @@ __all__ = [
     
     # NPC智能体
     'NPCAgent',
-    'NPCMemory',
     'create_npc_agent',
+    
+    # NPC记忆系统
+    'EnhancedNPCMemory',
+    'SemanticMemoryRetriever',
+    'MemoryImportanceScorer',
+    'MemorySummarizer',
+    'MemoryScore',
+    
+    # NPC情绪系统
+    'EmotionType',
+    'EmotionalState',
+    'EmotionStateMachine',
+    'BehaviorDecisionTree',
+    'RelationshipManager',
     
     # NPC智能体池
     'NPCAgentPool',
@@ -77,6 +113,14 @@ __all__ = [
     'ResponseGenerator',
     'DMStylesConfig',
     'create_response_generator',
+    
+    # 记忆管理系统
+    'CacheKeyGenerator',
+    'SceneMemoryManager',
+    'HistoryMemoryManager',
+    'NPCMemoryStorageService',
+    'MemoryRetrievalService',
+    'MemoryManagerFactory',
     
     # DM核心智能体
     'DMAgent',

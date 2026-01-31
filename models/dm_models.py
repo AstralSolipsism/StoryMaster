@@ -564,13 +564,13 @@ class DMConfig:
 @dataclass
 class CustomDMStyleRequest:
     """自定义DM风格请求"""
-    style_name: str = field(..., description="风格名称")
-    style_description: str = field(..., description="风格描述")
-    system_prompt: Optional[str] = field(None, description="自定义系统提示词")
-    narrative_tone: NarrativeTone = field(default=NarrativeTone.DESCRIPTIVE, description="叙述基调")
-    combat_detail: CombatDetail = field(default=CombatDetail.NORMAL, description="战斗细节程度")
-    temperature: float = field(default=0.7, description="温度参数（0.0-1.0）")
-    examples: List[str] = field(default_factory=list, description="示例描述")
+    style_name: str
+    style_description: str
+    system_prompt: Optional[str] = None
+    narrative_tone: NarrativeTone = NarrativeTone.DESCRIPTIVE
+    combat_detail: CombatDetail = CombatDetail.NORMAL
+    temperature: float = 0.7
+    examples: List[str] = field(default_factory=list)
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
@@ -713,3 +713,165 @@ PREDEFINED_DM_STYLES = {
 def get_predefined_dm_style(style_name: str) -> Optional[CustomDMStyleRequest]:
     """获取预定义的DM风格"""
     return PREDEFINED_DM_STYLES.get(style_name)
+
+
+# ==================== 记忆管理相关 ====================
+
+@dataclass
+class SceneMemory:
+    """场景记忆"""
+    memory_id: str
+    session_id: str
+    scene_id: str
+    event_type: str  # 'state_change', 'interaction', 'environment', 'discovery'
+    timestamp: datetime
+    description: str
+    involved_entities: List[str] = field(default_factory=list)  # entity_ids
+    state_changes: Dict[str, Any] = field(default_factory=dict)
+    related_scene_ids: List[str] = field(default_factory=list)
+    importance: float = 0.5  # 0-1
+    tags: List[str] = field(default_factory=list)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        return {
+            'memory_id': self.memory_id,
+            'session_id': self.session_id,
+            'scene_id': self.scene_id,
+            'event_type': self.event_type,
+            'timestamp': self.timestamp.isoformat(),
+            'description': self.description,
+            'involved_entities': self.involved_entities,
+            'state_changes': self.state_changes,
+            'related_scene_ids': self.related_scene_ids,
+            'importance': self.importance,
+            'tags': self.tags
+        }
+
+
+@dataclass
+class HistoryMemory:
+    """历史记忆"""
+    memory_id: str
+    session_id: str
+    timestamp: datetime
+    event_type: str  # 'player_action', 'npc_response', 'dm_narration', 'system_event'
+    content: str
+    participants: List[str] = field(default_factory=list)  # character_ids, npc_ids
+    location: Optional[str] = None  # scene_id
+    summary: str = ""
+    importance: float = 0.5  # 0-1
+    tags: List[str] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        return {
+            'memory_id': self.memory_id,
+            'session_id': self.session_id,
+            'timestamp': self.timestamp.isoformat(),
+            'event_type': self.event_type,
+            'content': self.content,
+            'participants': self.participants,
+            'location': self.location,
+            'summary': self.summary,
+            'importance': self.importance,
+            'tags': self.tags,
+            'metadata': self.metadata
+        }
+
+
+@dataclass
+class NPCMemoryRecord:
+    """NPC记忆记录（用于持久化）"""
+    record_id: str
+    npc_id: str
+    session_id: str
+    timestamp: datetime
+    interaction: str
+    response: str
+    emotion: str
+    attitude: str
+    character_id: Optional[str] = None
+    summary: str = ""
+    importance: float = 0.5  # 0-1
+    relationship_delta: float = 0.0
+    compressed: bool = False
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        return {
+            'record_id': self.record_id,
+            'npc_id': self.npc_id,
+            'session_id': self.session_id,
+            'timestamp': self.timestamp.isoformat(),
+            'interaction': self.interaction,
+            'response': self.response,
+            'emotion': self.emotion,
+            'attitude': self.attitude,
+            'character_id': self.character_id,
+            'summary': self.summary,
+            'importance': self.importance,
+            'relationship_delta': self.relationship_delta,
+            'compressed': self.compressed,
+            'metadata': self.metadata
+        }
+
+
+@dataclass
+class MemorySearchQuery:
+    """记忆搜索查询"""
+    session_id: str
+    query_text: str
+    memory_types: Optional[List[str]] = None  # 'scene', 'history', 'npc'
+    entity_ids: Optional[List[str]] = None
+    scene_ids: Optional[List[str]] = None
+    npc_ids: Optional[List[str]] = None
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    tags: Optional[List[str]] = None
+    min_importance: float = 0.0
+    limit: int = 10
+    include_compressed: bool = False
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        return {
+            'session_id': self.session_id,
+            'query_text': self.query_text,
+            'memory_types': self.memory_types,
+            'entity_ids': self.entity_ids,
+            'scene_ids': self.scene_ids,
+            'npc_ids': self.npc_ids,
+            'start_time': self.start_time.isoformat() if self.start_time else None,
+            'end_time': self.end_time.isoformat() if self.end_time else None,
+            'tags': self.tags,
+            'min_importance': self.min_importance,
+            'limit': self.limit,
+            'include_compressed': self.include_compressed
+        }
+
+
+@dataclass
+class MemorySearchResult:
+    """记忆搜索结果"""
+    memory_id: str
+    memory_type: str  # 'scene', 'history', 'npc'
+    content: str
+    relevance_score: float  # 0-1
+    importance: float
+    timestamp: datetime
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        return {
+            'memory_id': self.memory_id,
+            'memory_type': self.memory_type,
+            'content': self.content,
+            'relevance_score': self.relevance_score,
+            'importance': self.importance,
+            'timestamp': self.timestamp.isoformat(),
+            'metadata': self.metadata
+        }

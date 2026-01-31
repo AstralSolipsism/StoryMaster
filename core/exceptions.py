@@ -17,7 +17,7 @@ from fastapi.exceptions import RequestValidationError, HTTPException
 from pydantic import ValidationError as PydanticValidationError
 import pydantic
 
-from .logging import app_logger
+from .logging import app_logger, log_exception_alert
 
 
 class StoryMasterException(Exception):
@@ -193,6 +193,16 @@ def setup_exception_handlers(app: FastAPI) -> None:
                 "method": request.method
             }
         )
+        if exc.status_code >= status.HTTP_500_INTERNAL_SERVER_ERROR:
+            log_exception_alert(
+                app_logger,
+                "StoryMaster异常告警",
+                alert_code=exc.error_code,
+                severity="error",
+                request_id=request_id,
+                path=str(request.url),
+                method=request.method,
+            )
         
         # 返回标准错误响应
         error_response = ErrorResponse(
@@ -226,6 +236,16 @@ def setup_exception_handlers(app: FastAPI) -> None:
                 "method": request.method
             }
         )
+        if exc.status_code >= status.HTTP_500_INTERNAL_SERVER_ERROR:
+            log_exception_alert(
+                app_logger,
+                "HTTP异常告警",
+                alert_code="HTTP_ERROR",
+                severity="error",
+                request_id=request_id,
+                path=str(request.url),
+                method=request.method,
+            )
         
         # 返回标准错误响应
         error_response = ErrorResponse(
@@ -301,6 +321,15 @@ def setup_exception_handlers(app: FastAPI) -> None:
                 "method": request.method
             }
         )
+        log_exception_alert(
+            app_logger,
+            "Pydantic验证异常告警",
+            alert_code="PYDANTIC_VALIDATION_ERROR",
+            severity="error",
+            request_id=request_id,
+            path=str(request.url),
+            method=request.method,
+        )
         
         # 返回标准错误响应
         error_response = ErrorResponse(
@@ -338,6 +367,16 @@ def setup_exception_handlers(app: FastAPI) -> None:
                 "method": request.method
             }
         )
+        log_exception_alert(
+            app_logger,
+            "未捕获异常告警",
+            alert_code="UNHANDLED_EXCEPTION",
+            severity="critical",
+            exception_type=type(exc).__name__,
+            request_id=request_id,
+            path=str(request.url),
+            method=request.method,
+        )
         
         # 返回通用错误响应（不暴露内部错误详情）
         error_response = ErrorResponse(
@@ -355,9 +394,12 @@ def setup_exception_handlers(app: FastAPI) -> None:
 
 
 # 导出异常类和函数
+ValidationError = StoryMasterValidationError
+
 __all__ = [
     "StoryMasterException",
     "StoryMasterValidationError",
+    "ValidationError",
     "AuthenticationError",
     "AuthorizationError",
     "NotFoundError",

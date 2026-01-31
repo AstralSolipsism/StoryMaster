@@ -52,7 +52,7 @@ async def get_dm_agent(
     
     if dm_id not in _dm_agents:
         # 延迟初始化
-        from ...model_adapter import ModelScheduler
+        from ...provider import ProviderManager
         from ...data_storage.repositories.entity_repository import EntityRepository
         from ...data_storage.managers.cache_manager import CacheManager
         from ...data_storage.adapters.neo4j_adapter import Neo4jAdapter
@@ -80,8 +80,8 @@ async def get_dm_agent(
         game_record_repository = MockGameRecordRepository()
         
         # 创建模型调度器
-        from ...model_adapter import create_model_scheduler
-        model_scheduler = create_model_scheduler()
+        from ...provider import create_provider_manager
+        model_scheduler = create_provider_manager()
         
         # 创建DM配置
         from ...models.dm_models import create_dm_config

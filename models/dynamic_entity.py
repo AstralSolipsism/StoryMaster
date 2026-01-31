@@ -17,7 +17,8 @@ from ..core.schema_manager import (
     PropertyDefinition,
     PropertyType,
 )
-from ..core.exceptions import ValidationError, DataStorageError
+from ..core.exceptions import StoryMasterValidationError as ValidationError
+from ..data_storage.interfaces import DataStorageError
 
 
 @dataclass

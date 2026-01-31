@@ -11,10 +11,9 @@
 
 import logging
 import logging.handlers
-import os
 import sys
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import structlog
 from pythonjsonlogger import jsonlogger
@@ -54,11 +53,18 @@ def setup_logging() -> None:
     - 根日志记录器
     - 文件处理器（带轮转）
     - 控制台处理器
+    - 异常告警处理器
+    - LLM请求处理器
     - 结构化日志（JSON格式）
     """
     # 确保日志目录存在
-    log_dir = Path(settings.log_file).parent
-    log_dir.mkdir(parents=True, exist_ok=True)
+    log_dirs = {
+        Path(settings.log_file).parent,
+        Path(settings.log_alert_file).parent,
+        Path(settings.log_llm_file).parent,
+    }
+    for log_dir in log_dirs:
+        log_dir.mkdir(parents=True, exist_ok=True)
     
     # 获取根日志记录器
     root_logger = logging.getLogger()
@@ -72,6 +78,12 @@ def setup_logging() -> None:
     
     # 设置控制台处理器
     _setup_console_handler(root_logger)
+
+    # 设置告警处理器
+    _setup_alert_handler(root_logger)
+
+    # 设置LLM日志处理器
+    _setup_llm_handler(root_logger)
     
     # 配置structlog
     _setup_structlog()
@@ -83,6 +95,8 @@ def setup_logging() -> None:
         extra={
             "log_level": settings.log_level,
             "log_file": settings.log_file,
+            "alert_log_file": settings.log_alert_file,
+            "llm_log_file": settings.log_llm_file,
             "max_file_size_mb": settings.log_file_max_size,
             "backup_count": settings.log_file_backup_count
         }
@@ -109,6 +123,41 @@ def _setup_file_handler(logger: logging.Logger) -> None:
     file_handler.setLevel(getattr(logging, settings.log_level))
     
     logger.addHandler(file_handler)
+
+
+def _setup_alert_handler(logger: logging.Logger) -> None:
+    """设置异常告警处理器"""
+    alert_handler = logging.handlers.RotatingFileHandler(
+        filename=settings.log_alert_file,
+        maxBytes=settings.log_file_max_size * 1024 * 1024,
+        backupCount=settings.log_file_backup_count,
+        encoding="utf-8",
+    )
+    alert_formatter = jsonlogger.JsonFormatter(
+        fmt="%(asctime)s %(name)s %(levelname)s %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    alert_handler.setFormatter(alert_formatter)
+    alert_handler.setLevel(logging.ERROR)
+    logger.addHandler(alert_handler)
+
+
+def _setup_llm_handler(logger: logging.Logger) -> None:
+    """设置大模型请求日志处理器"""
+    llm_handler = logging.handlers.RotatingFileHandler(
+        filename=settings.log_llm_file,
+        maxBytes=settings.log_file_max_size * 1024 * 1024,
+        backupCount=settings.log_file_backup_count,
+        encoding="utf-8",
+    )
+    llm_formatter = jsonlogger.JsonFormatter(
+        fmt="%(asctime)s %(name)s %(levelname)s %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    llm_handler.setFormatter(llm_formatter)
+    llm_handler.setLevel(getattr(logging, settings.log_level))
+    llm_handler.addFilter(lambda record: record.name == "llm")
+    logger.addHandler(llm_handler)
 
 
 def _setup_console_handler(logger: logging.Logger) -> None:
@@ -164,6 +213,110 @@ def get_logger(name: str) -> structlog.stdlib.BoundLogger:
         structlog.stdlib.BoundLogger: 结构化日志记录器
     """
     return structlog.get_logger(name)
+
+
+def log_exception_alert(
+    logger: structlog.stdlib.BoundLogger,
+    message: str,
+    *,
+    alert_code: Optional[str] = None,
+    severity: str = "error",
+    **context: Any,
+) -> None:
+    """记录异常告警日志"""
+    payload = {
+        "event_type": "exception_alert",
+        "alert_code": alert_code or "UNHANDLED_EXCEPTION",
+        "severity": severity,
+        **context,
+    }
+    if severity == "critical":
+        logger.critical(message, **payload)
+    else:
+        logger.error(message, **payload)
+
+
+def _summarize_messages(messages: Any, max_chars: Optional[int] = None) -> Any:
+    if messages is None:
+        return None
+    if isinstance(messages, list):
+        summarized = []
+        for msg in messages:
+            if isinstance(msg, dict):
+                content = msg.get("content")
+                summarized.append(
+                    {
+                        "role": msg.get("role"),
+                        "content": _truncate_text(content, max_chars),
+                        "tool_calls": msg.get("tool_calls"),
+                        "tool_call_id": msg.get("tool_call_id"),
+                    }
+                )
+            else:
+                summarized.append(_truncate_text(str(msg), max_chars))
+        return summarized
+    return _truncate_text(messages, max_chars)
+
+
+def _truncate_text(content: Any, max_chars: Optional[int] = None) -> Any:
+    if max_chars is None:
+        return content
+    if isinstance(content, str):
+        if len(content) > max_chars:
+            return content[:max_chars] + "..."
+        return content
+    if isinstance(content, list):
+        trimmed = []
+        remaining = max_chars
+        for item in content:
+            item_text = str(item)
+            if remaining <= 0:
+                break
+            if len(item_text) > remaining:
+                trimmed.append(item_text[:remaining] + "...")
+                remaining = 0
+            else:
+                trimmed.append(item_text)
+                remaining -= len(item_text)
+        return trimmed
+    return content
+
+
+def log_llm_traffic(
+    logger: structlog.stdlib.BoundLogger,
+    *,
+    request_id: Optional[str] = None,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    messages: Any = None,
+    request_payload: Optional[Dict[str, Any]] = None,
+    response_payload: Optional[Dict[str, Any]] = None,
+    response_text: Optional[str] = None,
+    latency_ms: Optional[int] = None,
+    status: str = "ok",
+    error: Optional[str] = None,
+    user_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> None:
+    payload = {
+        "event_type": "llm_traffic",
+        "request_id": request_id,
+        "provider": provider,
+        "model": model,
+        "messages": _summarize_messages(messages),
+        "request_payload": request_payload,
+        "response_payload": response_payload,
+        "response_text": response_text,
+        "latency_ms": latency_ms,
+        "status": status,
+        "error": error,
+        "user_id": user_id,
+        "session_id": session_id,
+    }
+    if extra:
+        payload.update(extra)
+    logger.info("LLM traffic", **payload)
 
 
 class LoggerMixin:
@@ -228,6 +381,7 @@ db_logger = get_logger("database")
 api_logger = get_logger("api")
 auth_logger = get_logger("auth")
 agent_logger = get_logger("agent")
+llm_logger = get_logger("llm")
 
 # 导出函数和类
 __all__ = [
@@ -235,9 +389,12 @@ __all__ = [
     "get_logger",
     "LoggerMixin",
     "log_function_call",
+    "log_exception_alert",
+    "log_llm_traffic",
     "app_logger",
     "db_logger",
     "api_logger",
     "auth_logger",
     "agent_logger",
+    "llm_logger",
 ]

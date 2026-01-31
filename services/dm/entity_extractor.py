@@ -14,11 +14,11 @@ from ...models.dm_models import (
     MatchedEntity,
     InputType
 )
-from ...models.dynamic_entity import Entity
+from ...data_storage.interfaces import Entity
 from ...data_storage.interfaces import EntityFilter, IEntityRepository
 from ...data_storage.managers.cache_manager import CacheManager
 from ...data_storage.adapters.redis_adapter import RedisAdapter
-from ...model_adapter import ModelScheduler, RequestContext, ChatMessage
+from ...provider import ProviderManager, ProviderRequest, ChatMessage
 from ...core.logging import app_logger
 
 
@@ -27,7 +27,7 @@ class EntityExtractor:
     
     def __init__(
         self,
-        model_scheduler: ModelScheduler,
+        model_scheduler: ProviderManager,
         entity_repository: IEntityRepository,
         cache_manager: Optional[CacheManager] = None,
         temperature: float = 0.3
@@ -135,7 +135,7 @@ class EntityExtractor:
         prompt = self._build_extraction_prompt(classified_input)
         
         # 调用LLM
-        request_context = RequestContext(
+        request_context = ProviderRequest(
             messages=[
                 ChatMessage(
                     role='system',
@@ -289,7 +289,7 @@ class EntityExtractor:
 }}
 """
         
-        request_context = RequestContext(
+        request_context = ProviderRequest(
             messages=[
                 ChatMessage(
                     role='system',
@@ -453,7 +453,7 @@ class EntityExtractor:
 # ==================== 工厂函数 ====================
 
 def create_entity_extractor(
-    model_scheduler: ModelScheduler,
+    model_scheduler: ProviderManager,
     entity_repository: IEntityRepository,
     redis_adapter: Optional[RedisAdapter] = None,
     temperature: float = 0.3

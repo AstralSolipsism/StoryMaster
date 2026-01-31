@@ -16,8 +16,8 @@ from typing import Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from core.config import settings
-from core.database import db_manager
+from ...core.config import settings
+from ...core.database import db_manager
 
 # 创建路由器
 router = APIRouter()

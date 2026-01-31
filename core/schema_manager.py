@@ -17,7 +17,8 @@ from datetime import datetime
 from pathlib import Path
 
 from .config import settings
-from .exceptions import ValidationError, DataStorageError
+from .exceptions import StoryMasterValidationError as ValidationError
+from ..data_storage.interfaces import DataStorageError
 
 logger = logging.getLogger(__name__)
 
@@ -29,9 +30,9 @@ class PropertyDefinition:
     """属性定义"""
     name: str
     type: str  # string, integer, number, boolean, array, object
+    description: str = ""
     required: bool = True
     default: Any = None
-    description: str = ""
     min_value: Optional[Union[int, float]] = None
     max_value: Optional[Union[int, float]] = None
     enum_values: Optional[List[str]] = None
@@ -77,8 +78,8 @@ class RulebookSchema:
     name: str
     version: str
     author: str
+    game_system: str = "dnd_5e"  # D&D, Pathfinder, etc.
     description: str = ""
-    game_system: str  # D&D, Pathfinder, etc.
     
     # 实体定义
     entities: Dict[str, EntityDefinition] = field(default_factory=dict)
@@ -182,7 +183,7 @@ class SchemaManager:
             
         except Exception as e:
             logger.error(f"加载Schema失败: {schema_id}, 错误: {e}")
-            raise DataStorageError(f"加载Schema失败: {e}")
+            raise DataStorageError(f"加载Schema失败: {e}") from e
     
     async def _load_schema_from_file(self, schema_id: str) -> RulebookSchema:
         """

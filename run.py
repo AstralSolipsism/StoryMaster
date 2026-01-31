@@ -14,6 +14,10 @@ import argparse
 from pathlib import Path
 from typing import List, Optional
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 import uvicorn
 
 # 修复Windows控制台编码问题
@@ -49,8 +53,9 @@ def check_env_file() -> bool:
     Returns:
         bool: 环境文件是否存在
     """
-    env_file = Path(".env")
-    env_example = Path(".env.example")
+    env_dir = Path(__file__).resolve().parent
+    env_file = env_dir / ".env"
+    env_example = env_dir / ".env.example"
     
     if not env_file.exists():
         if env_example.exists():
@@ -63,6 +68,7 @@ def check_env_file() -> bool:
                 if response in ['y', 'yes', '是']:
                     import shutil
                     shutil.copy(env_example, env_file)
+                    os.chdir(env_dir)
                     print("✅ 已复制.env.example到.env")
                     print("   请编辑.env文件配置您的环境变量")
                     return True
@@ -141,7 +147,7 @@ def start_dev_server(host: str = "0.0.0.0", port: int = 8000, reload: bool = Tru
     print("   开发模式启用热重载")
     
     uvicorn.run(
-        "main:app",
+        "StoryMaster.main:app",
         host=host,
         port=port,
         reload=reload,
@@ -164,7 +170,7 @@ def start_prod_server(host: str = "0.0.0.0", port: int = 8000, workers: int = 4)
     print(f"   工作进程数: {workers}")
     
     uvicorn.run(
-        "main:app",
+        "StoryMaster.main:app",
         host=host,
         port=port,
         workers=workers,

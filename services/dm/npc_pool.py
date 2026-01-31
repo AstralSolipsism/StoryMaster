@@ -4,15 +4,14 @@ NPC智能体池
 """
 
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 
 from ...models.dm_models import DispatchedTask, NPCResponse
-from ...models.dynamic_entity import Entity
-from ...data_storage.interfaces import IEntityRepository
-from ...model_adapter import ModelScheduler
+from ...data_storage.interfaces import Entity, IEntityRepository
+from ...provider import ProviderManager
 from ...core.logging import app_logger
 
-from .npc_agent import NPCAgent, NPCMemory, create_npc_agent
+from .npc_agent import NPCAgent, create_npc_agent
 
 
 class NPCAgentPool:
@@ -21,7 +20,7 @@ class NPCAgentPool:
     def __init__(
         self,
         entity_repository: IEntityRepository,
-        model_scheduler: ModelScheduler
+        model_scheduler: ProviderManager
     ):
         """
         初始化NPC智能体池
@@ -423,7 +422,7 @@ class NPCAgentPool:
 
 def create_npc_pool(
     entity_repository: IEntityRepository,
-    model_scheduler: ModelScheduler
+    model_scheduler: ProviderManager
 ) -> NPCAgentPool:
     """
     创建NPC智能体池实例

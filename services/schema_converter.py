@@ -50,8 +50,9 @@ class SchemaConverter:
             schema_id = f"{base_name}_{user_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             
             # Process rulebook schema
+            schema_payload = parsing_result.get('rulebook_schema') or parsing_result or {}
             rulebook_schema = await self._process_rulebook_schema(
-                parsing_result.get('rulebook_schema', {}),
+                schema_payload,
                 schema_id
             )
             
@@ -183,14 +184,16 @@ class SchemaConverter:
         """Validate schema data"""
         errors = []
         
-        # Check required fields
-        if 'schema_id' not in schema_data:
-            errors.append("Missing required field: schema_id")
-        
         # Check entity definitions
         entities = schema_data.get('entities', {})
+        if entities is None:
+            entities = {}
+        if isinstance(entities, list):
+            self.logger.warning("Schema entities is a list; normalizing to empty dict")
+            entities = {}
         if not entities:
-            errors.append("Must define at least one entity")
+            self.logger.warning("Schema has no entities; continuing with empty entities")
+            return errors
         
         for entity_id, entity_def in entities.items():
             entity_errors = await self._validate_entity(entity_id, entity_def, entities.keys())
@@ -244,6 +247,15 @@ class SchemaConverter:
             'rules': schema_data.get('rules', {}),
             'functions': schema_data.get('functions', {})
         }
+
+    def _detect_game_system(self, rulebook_schema: Dict[str, Any], file_info: Dict[str, Any]) -> str:
+        file_name = (file_info.get('file_name') or file_info.get('name') or '').lower()
+        description = (rulebook_schema.get('description') or '').lower()
+        name = (rulebook_schema.get('name') or '').lower()
+        content = f"{file_name} {name} {description}"
+        if 'dnd' in content or 'd&d' in content or '龙与地下城' in content:
+            return 'dnd_5e'
+        return rulebook_schema.get('game_system', 'generic')
     
     async def _validate_entity(self, entity_type: str, entity_def: Dict[str, Any], all_entities: List[str]) -> Dict[str, List[str]]:
         """Validate single entity definition"""

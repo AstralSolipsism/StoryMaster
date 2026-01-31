@@ -6,9 +6,9 @@
 from typing import Dict, Any, Optional
 from datetime import datetime
 
-from ..core.logging import app_logger
-from ..core.exceptions import StoryMasterValidationError, NotFoundError
-from ..data_storage.rulebook_manager import RulebookManager
+from ...core.logging import app_logger
+from ...core.exceptions import StoryMasterValidationError, NotFoundError
+from ...data_storage.rulebook_manager import RulebookManager
 
 
 class RulebookParserIntegration:

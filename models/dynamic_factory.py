@@ -12,7 +12,8 @@ from abc import ABC, abstractmethod
 
 from .dynamic_entity import DynamicEntity
 from ..core.schema_manager import SchemaManager, RulebookSchema, EntityDefinition
-from ..core.exceptions import ValidationError, DataStorageError
+from ..core.exceptions import StoryMasterValidationError as ValidationError
+from ..data_storage.interfaces import DataStorageError
 
 logger = logging.getLogger(__name__)
 

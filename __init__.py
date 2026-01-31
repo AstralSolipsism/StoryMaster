@@ -24,7 +24,7 @@ __description__ = "StoryMaster D&D AI跑团应用后端API"
 # 导入主要模块（这些将在后续步骤中实现）
 # from .agent_orchestration import *
 # from .data_storage import *
-# from .model_adapter import *
+# from .provider import *
 
 __all__ = [
     "__version__",

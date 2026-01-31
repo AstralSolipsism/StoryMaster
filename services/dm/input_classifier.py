@@ -13,7 +13,7 @@ from ...models.dm_models import (
     InputType
 )
 from ...core.logging import app_logger
-from ...model_adapter import ModelScheduler, RequestContext, ChatMessage
+from ...provider import ProviderManager, ProviderRequest, ChatMessage
 
 
 class InputClassifier:
@@ -21,7 +21,7 @@ class InputClassifier:
     
     def __init__(
         self,
-        model_scheduler: ModelScheduler,
+        model_scheduler: ProviderManager,
         temperature: float = 0.3
     ):
         """
@@ -142,7 +142,7 @@ class InputClassifier:
         prompt = self._build_classification_prompt(input_data)
         
         # 调用LLM
-        request_context = RequestContext(
+        request_context = ProviderRequest(
             messages=[
                 ChatMessage(
                     role='system',
@@ -288,7 +288,7 @@ class InputClassifier:
 # ==================== 工厂函数 ====================
 
 def create_input_classifier(
-    model_scheduler: ModelScheduler,
+    model_scheduler: ProviderManager,
     temperature: float = 0.3
 ) -> InputClassifier:
     """

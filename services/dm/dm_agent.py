@@ -22,10 +22,10 @@ from ...models.dm_models import (
     DMStyle,
     CustomDMStyleRequest
 )
-from ...agent_orchestration.core import BaseAgent, AgentConfig, ExecutionContext, ReasoningMode
-from ...model_adapter import ModelScheduler
+from ...agent.core import BaseAgent, AgentConfig, ExecutionContext, ReasoningMode
+from ...provider import ProviderManager
 from ...data_storage.interfaces import IEntityRepository, IGameRecordRepository
-from ...agent_orchestration.interfaces import IOrchestrator
+from ...agent.interfaces import IOrchestrator
 
 from .input_classifier import InputClassifier, create_input_classifier
 from .entity_extractor import EntityExtractor, create_entity_extractor
@@ -33,6 +33,13 @@ from .task_dispatcher import TaskDispatcher, create_task_dispatcher
 from .npc_pool import NPCAgentPool, create_npc_pool
 from .time_manager import TimeManager, create_time_manager, create_spell_recovery_event
 from .response_generator import ResponseGenerator, create_response_generator
+from .memory_managers import (
+    MemoryManagerFactory,
+    SceneMemoryManager,
+    HistoryMemoryManager,
+    NPCMemoryStorageService,
+    MemoryRetrievalService
+)
 from ...core.logging import app_logger
 
 
@@ -43,7 +50,7 @@ class DMAgent(BaseAgent):
         self,
         agent_id: str,
         config: DMConfig,
-        model_scheduler: ModelScheduler,
+        model_scheduler: ProviderManager,
         entity_repository: IEntityRepository,
         game_record_repository: IGameRecordRepository,
         orchestrator: Optional[IOrchestrator] = None,
@@ -100,6 +107,12 @@ class DMAgent(BaseAgent):
         self.time_manager: TimeManager = None
         self.response_generator: ResponseGenerator = None
         
+        # 记忆管理组件
+        self.scene_memory_manager: SceneMemoryManager = None
+        self.history_memory_manager: HistoryMemoryManager = None
+        self.npc_memory_storage_service: NPCMemoryStorageService = None
+        self.memory_retrieval_service: MemoryRetrievalService = None
+        
         # 会话状态
         self.current_session: Optional[GameSession] = None
         self.pending_npc_responses: Dict[str, NPCResponse] = {}
@@ -149,10 +162,52 @@ class DMAgent(BaseAgent):
                 combat_detail=self.config.combat_detail
             )
             
+            # 初始化记忆管理器
+            await self._initialize_memory_managers()
+            
             self.logger.info("DM智能体组件初始化完成")
             
         except Exception as e:
             self.logger.error(f"DM组件初始化失败: {e}", exc_info=True)
+            raise
+    
+    async def _initialize_memory_managers(self) -> None:
+        """初始化记忆管理器"""
+        try:
+            # 获取记忆仓库（需要实现）
+            # 这里假设entity_repository也实现了IMemoryRepository接口
+            # 如果没有，需要单独传入
+            
+            # 创建场景记忆管理器
+            self.scene_memory_manager = MemoryManagerFactory.create_scene_memory_manager(
+                memory_repository=self.game_record_repository,
+                cache_manager=None  # TODO: 添加缓存管理器
+            )
+            
+            # 创建历史记忆管理器
+            self.history_memory_manager = MemoryManagerFactory.create_history_memory_manager(
+                memory_repository=self.game_record_repository,
+                model_scheduler=self.model_scheduler,
+                cache_manager=None  # TODO: 添加缓存管理器
+            )
+            
+            # 创建NPC记忆存储服务
+            self.npc_memory_storage_service = MemoryManagerFactory.create_npc_memory_storage_service(
+                memory_repository=self.game_record_repository,
+                cache_manager=None  # TODO: 添加缓存管理器
+            )
+            
+            # 创建记忆检索服务
+            self.memory_retrieval_service = MemoryManagerFactory.create_memory_retrieval_service(
+                memory_repository=self.game_record_repository,
+                model_scheduler=self.model_scheduler,
+                cache_manager=None  # TODO: 添加缓存管理器
+            )
+            
+            self.logger.info("记忆管理器初始化完成")
+            
+        except Exception as e:
+            self.logger.error(f"记忆管理器初始化失败: {e}", exc_info=True)
             raise
     
     async def _register_default_event_rules(self) -> None:
@@ -454,11 +509,145 @@ class DMAgent(BaseAgent):
             session_id, tasks, npc_results
         )
         
-        # 保存游戏记录
-        # TODO: 实现游戏记录保存
+        # 保存NPC交互记录到数据库
+        for task in tasks:
+            if task.target_npc_id and task.target_npc_id in npc_results:
+                npc_response = npc_results[task.target_npc_id]
+                await self.npc_memory_storage_service.save_interaction(
+                    npc_id=task.target_npc_id,
+                    session_id=session_id,
+                    task=task,
+                    response=npc_response
+                )
         
-        # TODO: 实现场景记忆更新
-        # TODO: 实现历史记忆更新
+        # 记录历史记忆
+        await self._record_history_memories(
+            session_id, inputs, tasks, npc_results, events
+        )
+        
+        # 记录场景记忆
+        await self._record_scene_memories(
+            session_id, tasks, events
+        )
+    
+    async def _record_history_memories(
+        self,
+        session_id: str,
+        inputs: List[PlayerInput],
+        tasks: List[DispatchedTask],
+        npc_results: Dict[str, NPCResponse],
+        events: List[GameEvent]
+    ) -> None:
+        """
+        记录历史记忆
+        
+        Args:
+            session_id: 会话ID
+            inputs: 玩家输入列表
+            tasks: 分发的任务列表
+            npc_results: NPC响应字典
+            events: 事件列表
+        """
+        # 记录玩家行动
+        for input_data in inputs:
+            await self.history_memory_manager.record_event(
+                session_id=session_id,
+                event_type="player_action",
+                content=input_data.content,
+                participants=[input_data.character_id],
+                location=self.current_session.current_scene_id if self.current_session else None,
+                importance=0.5
+            )
+        
+        # 记录NPC响应
+        for npc_id, response in npc_results.items():
+            await self.history_memory_manager.record_event(
+                session_id=session_id,
+                event_type="npc_response",
+                content=response.response,
+                participants=[npc_id],
+                location=self.current_session.current_scene_id if self.current_session else None,
+                importance=0.5,
+                metadata={
+                    'emotion': response.emotion,
+                    'attitude': response.attitude,
+                    'action': response.action
+                }
+            )
+        
+        # 记录事件
+        for event in events:
+            await self.history_memory_manager.record_event(
+                session_id=session_id,
+                event_type="system_event",
+                content=event.description,
+                participants=[],
+                location=self.current_session.current_scene_id if self.current_session else None,
+                importance=0.7,
+                metadata={
+                    'event_type': event.event_type,
+                    'effects': event.effects
+                }
+            )
+    
+    async def _record_scene_memories(
+        self,
+        session_id: str,
+        tasks: List[DispatchedTask],
+        events: List[GameEvent]
+    ) -> None:
+        """
+        记录场景记忆
+        
+        Args:
+            session_id: 会话ID
+            tasks: 分发的任务列表
+            events: 事件列表
+        """
+        if not self.current_session or not self.current_session.current_scene_id:
+            return
+        
+        scene_id = self.current_session.current_scene_id
+        
+        # 记录场景变化
+        involved_entities = []
+        state_changes = {}
+        
+        for task in tasks:
+            if task.entities:
+                involved_entities.extend(
+                    [e.extraction.entity_type + ":" + e.extraction.name
+                     for e in task.entities.entities]
+                )
+            
+            # 如果有行动任务，记录状态变化
+            if task.input_type == InputType.ACTION and task.task_data:
+                action_data = task.task_data
+                state_changes[action_data.action_type] = action_data.result
+        
+        # 记录场景事件
+        if involved_entities or state_changes:
+            await self.scene_memory_manager.record_event(
+                session_id=session_id,
+                scene_id=scene_id,
+                event_type="state_change",
+                description=f"场景发生变化：{len(involved_entities)}个实体参与",
+                involved_entities=involved_entities,
+                state_changes=state_changes,
+                importance=0.6
+            )
+        
+        # 记录环境事件
+        for event in events:
+            if event.event_type in ['environment', 'discovery']:
+                await self.scene_memory_manager.record_event(
+                    session_id=session_id,
+                    scene_id=scene_id,
+                    event_type=event.event_type,
+                    description=event.description,
+                    importance=0.8,
+                    metadata=event.effects
+                )
     
     async def _collect_perceptible_info(
         self,
@@ -685,6 +874,9 @@ class DMAgent(BaseAgent):
         # 重置时间管理器
         await self.time_manager.cleanup_session(session_id)
         
+        # 清理记忆缓存（如果有）
+        # TODO: 实现记忆缓存清理
+        
         # 如果是当前会话，清除
         if self.current_session and self.current_session.session_id == session_id:
             self.current_session = None
@@ -729,7 +921,7 @@ class DMAgent(BaseAgent):
 async def create_dm_agent(
     agent_id: str,
     config: DMConfig,
-    model_scheduler: ModelScheduler,
+    model_scheduler: ProviderManager,
     entity_repository: IEntityRepository,
     game_record_repository: IGameRecordRepository,
     orchestrator: Optional[IOrchestrator] = None

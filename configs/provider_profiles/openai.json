@@ -1,0 +1,8 @@
+{
+  "profile_id": "openai",
+  "name": "OpenAI",
+  "provider_type": "openai_chat_completion",
+  "api_key": "xxxx",
+  "base_url": "your-openai-url",
+  "model": "gpt-5.2"
+}

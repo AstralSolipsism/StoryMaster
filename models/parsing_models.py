@@ -9,19 +9,36 @@ from pydantic import BaseModel, Field, field_validator
 
 class RulebookUploadRequest(BaseModel):
     """规则书上傳請求"""
-    file_name: str = Field(..., description="文件名")
-    file_type: str = Field(..., description="文件类型")
-    parser_model: str = Field(default="gpt-4", description="解析模型")
+    file_name: Optional[str] = Field(default=None, description="文件名")
+    file_type: Optional[str] = Field(default=None, description="文件类型")
+    file_names: Optional[List[str]] = Field(default=None, description="文件名列表")
+    file_types: Optional[List[str]] = Field(default=None, description="文件类型列表")
+    parser_model: Optional[str] = Field(default=None, description="解析模型")
     parsing_options: Dict[str, Any] = Field(default_factory=dict, description="解析选项")
     user_id: str = Field(..., description="用户ID")
     
     @field_validator('file_type')
     @classmethod
     def validate_file_type(cls, v):
+        if v is None:
+            return v
         allowed_types = ['pdf', 'docx', 'txt', 'json', 'md']
         if v.lower() not in allowed_types:
-            raise ValueError(f"不支持的文件类型: {v}")
+            raise ValueError(f"Unsupported file type: {v}")
         return v.lower()
+
+    @field_validator('file_types')
+    @classmethod
+    def validate_file_types(cls, v):
+        if not v:
+            return v
+        allowed_types = ['pdf', 'docx', 'txt', 'json', 'md']
+        normalized = []
+        for file_type in v:
+            if file_type.lower() not in allowed_types:
+                raise ValueError(f"Unsupported file type: {file_type}")
+            normalized.append(file_type.lower())
+        return normalized
 
 
 class RulebookUploadResponse(BaseModel):
@@ -29,6 +46,7 @@ class RulebookUploadResponse(BaseModel):
     task_id: str = Field(..., description="任务ID")
     status: str = Field(..., description="任务状态")
     message: str = Field(..., description="响应消息")
+    file_count: int = Field(default=1, description="文件数量")
 
 
 class ParsingTaskStatus(BaseModel):

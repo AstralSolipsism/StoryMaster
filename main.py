@@ -6,7 +6,7 @@ StoryMaster D&D AI跑团应用后端API主入口
 - 配置中间件
 - 注册路由
 - 设置应用生命周期事件
-- 集成现有模块（agent_orchestration、data_storage、model_adapter）
+- 集成现有模块（agent_orchestration、data_storage、provider）
 """
 
 from contextlib import asynccontextmanager
@@ -14,20 +14,22 @@ from typing import AsyncGenerator
 from datetime import datetime
 
 from fastapi import FastAPI
+
+from .provider import create_provider_manager, ProviderProfileManager
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
 # 导入现有模块（这些将在后续步骤中完成集成）
-# from agent_orchestration import setup_agent_orchestration
-# from data_storage import setup_data_storage
-# from model_adapter import setup_model_adapter
+# from .agent_orchestration import setup_agent_orchestration
+# from .data_storage import setup_data_storage
+# from .provider import setup_provider
 
 # 导入路由和配置
-from api import get_api_router
-from core.config import settings
-from core.logging import setup_logging, app_logger
-from core.database import db_manager
-from core.exceptions import setup_exception_handlers
+from .api import get_api_router
+from .core.config import settings
+from .core.logging import setup_logging, app_logger
+from .core.database import db_manager
+from .core.exceptions import setup_exception_handlers
 
 
 @asynccontextmanager
@@ -41,12 +43,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     - 关闭时清理资源
     """
     # 启动时的初始化工作
-    app_logger.info("StoryMaster API 正在启动...")
-    
     try:
         # 设置日志系统
         setup_logging()
         app_logger.info("日志系统初始化完成")
+        app_logger.info("StoryMaster API 正在启动...")
         
         # 初始化数据库连接
         await db_manager.initialize()
@@ -58,8 +59,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # 初始化智能体编排系统
         # await setup_agent_orchestration()
         
-        # 初始化模型适配器
-        # await setup_model_adapter()
+        # 初始化 provider
+        provider_manager = create_provider_manager()
+        await provider_manager.initialize()
+        app.state.provider_manager = provider_manager
+        app.state.provider_profile_manager = ProviderProfileManager()
         
         app_logger.info("StoryMaster API 启动完成")
         
@@ -78,8 +82,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             await db_manager.close()
             app_logger.info("数据库连接已关闭")
             
-            # 清理AI模型资源
-            # await cleanup_model_adapter()
+            # 清理 provider 资源
+            provider_manager = getattr(app.state, "provider_manager", None)
+            if provider_manager:
+                await provider_manager.shutdown()
+            app.state.provider_profile_manager = None
             
             app_logger.info("StoryMaster API 已安全关闭")
         except Exception as e:
@@ -132,7 +139,7 @@ def create_application() -> FastAPI:
         app_logger.info("API路由已注册")
     
     # 设置应用启动时间（用于健康检查）
-    from api.v1.health import set_app_start_time
+    from .api.v1.health import set_app_start_time
     set_app_start_time(datetime.now())
     
     # 添加基础信息端点
